@@ -26,7 +26,7 @@ jobs:
       - run: uv tool install copier
 
       - name: Render all scopes and check the output
-        run: uv run python check-template.py
+        run: uv run --no-project python check-template.py
 
   generated-gates:
     name: generated repo passes its own gates (${{ matrix.scope }})
@@ -60,7 +60,7 @@ jobs:
             frontend-only) backend=false; frontend=true ;;
             backend-only)  backend=true;  frontend=false ;;
           esac
-          uv run python -m copier copy --trust --defaults --overwrite \
+          copier copy --trust --defaults --overwrite \
             -d backend=$backend -d frontend=$frontend \
             . "$RUNNER_TEMP/generated"
 
