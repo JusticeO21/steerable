@@ -30,12 +30,12 @@ or ask. Do not skip a check because an answer looks obvious.
 3. **Sources are declared.** Read `AGENTS.sources` in `.header.json`. A fact
    that comes from another file lists that file there. A fact that is not in
    this repository is marked `not-in-repo` and carries a link, never a guess.
-4. **Scope is known.** `.copier-answers.yml` records the answers used to
-   generate this project, `backend` and `frontend` among them. If a section of
-   this file describes code that is not in the repository, or a command that
-   does not exist, stop and tell the user before editing code. Do not work
-   around a scope mismatch; it means the repository was generated with the
-   wrong answers.
+4. **Scope is known.** This file is rendered for a **{{ project_type }}**
+   repository; `.header.json` `scope` records the `backend` and `frontend`
+   answers it came from. If a section of this file describes code that is not
+   in the repository, or a command that does not exist, stop and tell the user
+   before editing code. Do not work around a scope mismatch; it means the
+   repository was generated with the wrong answers.
 5. **Acceptance check.** `tools.acceptance` in `.header.json` is the command
    that proves the project builds and serves. Run it once before the first
    change. If it fails, that is the first task, not a reason to skip it.
