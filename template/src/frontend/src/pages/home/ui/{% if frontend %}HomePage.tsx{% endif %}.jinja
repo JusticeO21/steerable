@@ -1,0 +1,13 @@
+import { Button } from '@/shared/ui/Button'
+
+import { homeContent } from '../model/content'
+
+export function HomePage() {
+  return (
+    <main>
+      <h1>{homeContent.title}</h1>
+      <p>{homeContent.subtitle}</p>
+      <Button>{homeContent.action}</Button>
+    </main>
+  )
+}

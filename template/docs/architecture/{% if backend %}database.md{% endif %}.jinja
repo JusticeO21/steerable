@@ -1,0 +1,141 @@
+# Data Access Architecture
+
+This document fixes **how data access is organised**: where queries live, what
+owns a transaction, how schema changes are sequenced. It does not choose the
+store or the tooling — those are project decisions recorded in an ADR.
+
+> **Starting assumption: PostgreSQL via an ORM.** The examples below use SQL
+> and an ORM because they need a concrete syntax. A project that stores data
+> behind an HTTP API instead (Supabase, a managed backend) keeps every rule here
+> about *ownership and sequencing* and translates the mechanical parts.
+
+## Principles
+
+1. **Repositories own access.** Every read and write for a module happens in
+   that module's `repository.py`. No SQL, query builder, or data client call
+   appears anywhere else — not in a router, not in a service.
+2. **The service owns the transaction.** It opens the unit of work and decides
+   the boundary; repositories participate and never commit.
+3. **Integrity lives in the store**, not only in application code. Constraints
+   exist even if every caller is believed to be correct.
+4. **Migrations are forward-only and reviewed.** The schema is a product.
+5. **Everything tenant-owned is scoped everywhere**, enforced in the data layer,
+   not only in the layer above it.
+
+## Where data access lives
+
+| Concern | Where | Never |
+|---|---|---|
+| Queries and writes | `modules/<domain>/repository.py` | Routers, services, `core` |
+| Transaction boundary | `modules/<domain>/service.py` | Repositories |
+| Row and value shapes | private to the module | The API contract (`schemas.py`) |
+| Connection or client setup | `core/` | Module import time |
+| Schema migrations | `{{ migrations_root }}/` | Runtime code |
+
+A module reads and writes only its own data. Data another module owns is
+obtained by calling that module's **service**, never by querying its tables.
+
+## Naming and conventions
+
+- Tables and columns follow the project's `{{ db_conventions }}` convention, and
+  the whole schema follows one of them, not a mixture.
+- Every table carries `created_at` and `updated_at`.
+- Deletion is soft (`deleted_at`) only where recovery or audit requires it;
+  otherwise rows are deleted.
+- Enumerations are constrained values, not free text.
+- Money is integer minor units plus a currency code. Never floating point.
+- Timestamps are stored UTC.
+- Booleans are non-nullable with an explicit default.
+
+## Tenancy
+
+- Every tenant-owned row carries a tenant identifier, and it is part of every
+  uniqueness constraint that could otherwise collide across tenants.
+- Indexes for tenant-scoped reads lead with the tenant identifier.
+- **Scoping is enforced twice**: the repository always filters by tenant *and*
+  the store rejects cross-tenant access independently. One of the two is a bug
+  away from a leak; two are not.
+- The mechanism for the second layer (row-level security, a scoped credential,
+  a tenant-scoped API key) is a strategy decision. What is not optional is that
+  a second layer exists and that a test proves it.
+
+## Constraints
+
+- Non-nullable by default; nullable needs a stated reason.
+- Foreign keys always, with an explicit delete behaviour.
+- Check constraints for invariants (positive quantities, valid states).
+- Unique constraints for natural keys and idempotency keys.
+
+## Indexing
+
+- Index every foreign key and every column used in frequent filtering, joining,
+  or sorting.
+- Prefer composite indexes matching the query shape; equality columns first,
+  then range and sort.
+- Partial indexes for hot subsets.
+- Verify with the query plan; remove indexes nothing uses.
+- Build indexes on live tables without blocking writes.
+
+## Migrations
+
+- Every schema change is a versioned, reviewed migration. No ad-hoc DDL against
+  a shared database.
+- **Never edit an applied migration.** Fix forward.
+- **Expand / contract** for zero downtime:
+  1. *Expand:* add the new shape, nullable or additive, backward compatible.
+  2. *Migrate:* deploy code that writes both; backfill in batches as a job, not
+     inside the migration.
+  3. *Contract:* once nothing reads the old shape, remove it.
+- Never in one deploy: rename a column, drop a column still in use, add a
+  non-null column without a default to a large table, or run a long-locking
+  statement.
+- Each migration states its rollback strategy. Data-destructive changes need
+  explicit review.
+- CI proves migrations apply cleanly from empty and that the declared schema and
+  the migrations agree.
+
+## Transactions and isolation
+
+- Services open one transaction scope per request and keep it short. No network
+  calls inside.
+- Default isolation is sufficient for ordinary reads and writes. Invariants that
+  span rows (balances, inventory) use explicit locking or a stricter isolation
+  level, plus retry on conflict.
+- Work queues built on the database claim rows with a skip-locked pattern.
+
+## Outbox and idempotency
+
+- **Outbox:** an `outbox_events` table written in the same transaction as the
+  state change, then relayed to the queue. This is what makes "commit and
+  publish" a single atomic act.
+- **Idempotency:** an `idempotency_keys` table with a TTL, so a retried create
+  returns the first result instead of making a second one.
+
+## Auditing
+
+Sensitive changes (permissions, billing, deletions) append to an audit log
+recording actor, action, target, before and after, request id, and time. The
+application role cannot update or delete it.
+
+## Data lifecycle and privacy
+
+- Classify every column (public / internal / confidential / PII).
+- Define a retention period per table; scheduled jobs purge or anonymize.
+- Support export and deletion on request.
+- Production data never reaches a lower environment un-anonymized.
+
+## Backup and recovery
+
+- Continuous backups with point-in-time recovery, encrypted at rest.
+- **Restore drills are scheduled.** An untested backup is not a backup.
+- State target RPO and RTO, and measure against them.
+
+## Review checklist for schema changes
+
+- [ ] Backward compatible with the currently deployed application?
+- [ ] Constraints, foreign keys, and the tenant column present?
+- [ ] Tenant scoping tested against a cross-tenant read attempt?
+- [ ] Indexes support the new queries, built without blocking writes?
+- [ ] Lock impact on large tables assessed?
+- [ ] Backfill runs outside the migration?
+- [ ] PII classified and retention defined?

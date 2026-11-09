@@ -1,0 +1,282 @@
+# Backend Architecture
+
+## What this document fixes, and what it does not
+
+Two kinds of rule live below, and they have different owners.
+
+**Structure is mandatory.** The folder layout, the layers, the direction imports
+flow, and the file responsibilities are how this codebase is organised on every
+project. They do not change per project, and a change to them is a change to
+this document, reviewed like code.
+
+**Technology is the project's choice.** Which framework, which data-access
+approach, which queue, which third-party services: none of it is decided here.
+Those choices are expensive to reverse, so they belong in an ADR
+([decisions/](decisions/README.md)) made once, in a real project, by a human.
+Until an ADR exists, treat everything below that names a technology as an
+assumption.
+
+> **Starting assumption: FastAPI + SQLAlchemy.** This template's examples use
+> FastAPI for HTTP and SQLAlchemy for persistence, because the examples have to
+> be written in something. They illustrate the *structure*, not a requirement.
+> Record the real choice in the first ADR and update the examples here when it
+> differs. Nothing else in this document depends on it.
+
+## Layout
+
+```
+{{ backend_root }}/
+  app/
+    main.py                  # composition root: builds and wires the app
+    core/                    # cross-cutting, no domain knowledge
+      config.py              # settings, validated at startup
+      errors.py              # the error hierarchy + HTTP mapping
+      logging.py  telemetry.py  middleware.py
+    modules/
+      <domain>/              # e.g. orders, accounts, billing
+        router.py            # HTTP layer: parse, delegate, return a contract
+        schemas.py           # request/response contracts (the public API)
+        service.py           # business rules, authorization, orchestration
+        repository.py        # every data-store call for this module
+        events.py            # domain events this module emits
+        tasks.py             # background work this module owns
+        dependencies.py      # module-specific wiring
+    workers/
+      <worker entrypoint>    # process that drains this module's tasks
+  tests/                     # mirrors app/modules
+```
+
+Data-access, identity, and queue plumbing have no fixed file of their own; they
+live in `core/` and in the module that uses them. Adding `db.py`, `models.py`,
+`security.py`, or `queue.py` is fine: it follows from the project's ADR, not
+from this contract.
+
+`{{ backend_root }}/app/modules/orders/` is a **reference module**: three files
+in the shape below, so the boundary check runs against real code on day one.
+Replace it with the first real domain; do not grow it.
+
+## Layers and responsibilities
+
+| Layer | Owns | May depend on | Must not |
+|---|---|---|---|
+| `router.py` | HTTP concerns: parse input, check access, delegate, shape the response | `service`, `schemas`, `core` | Touch a data store; hold business rules |
+| `service.py` | Business rules, authorization, transaction boundaries, orchestration | own `repository`, other modules' **services**, `events`, `tasks` | Import the web framework; know about HTTP status codes or request objects |
+| `repository.py` | **Every** call to a data store for this module; no policy | the data client from `core` | Hold business rules; call services; decide access |
+| `schemas.py` | The public contract: request and response types, validation | nothing from this module | Leak persistence types into the contract |
+
+Imports flow **downward only**: `router → service → repository`. A module never
+reaches into another module's `repository`, `schemas`, or storage. Cross-module
+work goes through the other module's **service**.
+
+This direction is enforced in CI, not by review. See
+[Code quality gates](#code-quality-gates).
+
+## Module boundaries
+
+- One directory per domain concern. A module owns its routes, its rules, its
+  data calls, and its background work.
+- Modules are independent: deleting a module must not break another. If two
+  modules need the same rule, it moves into a shared module both may import,
+  never into one of them.
+- A module that needs another's data calls its service. It never joins across
+  its tables, reads its storage, or imports its repository.
+- This is the seam along which a module could later become a separate service.
+  Keep it clean for that reason: no shared tables, no shared mutable state,
+  explicit contracts between modules.
+
+## Contracts between layers
+
+- **The router speaks in `schemas`, never in storage types.** A repository
+  object never reaches the response.
+- **Services receive an explicit context** (tenant, caller, request id) rather
+  than reading ambient globals.
+- **Repositories receive their dependencies**; nothing constructs a client at
+  module import time.
+- **Errors are typed and shared.** Services raise domain errors; exactly one
+  place maps them to HTTP. See [Error handling](#error-handling).
+
+## API design
+
+- REST, JSON, plural nouns, versioned in the path: `/api/v1/orders/{order_id}`.
+- Additive changes are non-breaking; removals and renames need a new version
+  and a deprecation window.
+- Validate at the boundary: reject unknown fields, bound every length and
+  range, type every query and path parameter.
+- Separate schemas per purpose (`OrderCreate`, `OrderUpdate`, `OrderRead`).
+  Never reuse one type for input and output, and never expose a storage model.
+- Cursor pagination with a hard maximum page size. No unbounded lists.
+- Retriable creates accept an idempotency key.
+- Sorting and filtering use an explicit allow-list, never raw column names from
+  the client.
+- Every route declares its response type, status code, and documented error
+  responses. Give routes stable operation ids: client generation depends on
+  them.
+- The API description is exported in CI, diffed for breaking changes, and feeds
+  `{{ api_client_command }}`.
+
+### Error format
+
+```json
+{
+  "error": {
+    "code": "ORDER_NOT_FOUND",
+    "message": "Order not found",
+    "details": [],
+    "request_id": "c1f6..."
+  }
+}
+```
+
+| HTTP | When |
+|---|---|
+| 400 | Malformed request |
+| 401 | Not authenticated |
+| 403 | Authenticated, not permitted |
+| 404 | Not found **or** not visible to the caller (never leak existence across tenants) |
+| 409 | Conflict: duplicate, version mismatch, invalid state transition |
+| 422 | Validation error or business-rule violation |
+| 429 | Rate limited |
+| 5xx | Our fault; never expose internals |
+
+Stable machine-readable `code` values are part of the contract.
+
+## Error handling
+
+- Services raise typed domain errors (`NotFound`, `Conflict`, `Forbidden`,
+  `BusinessRuleViolation`), each carrying a `code` and a message.
+- One mapping layer turns a domain error into the HTTP envelope above. One
+  catch-all logs unexpected exceptions with stack and request id and returns a
+  generic 500.
+- Never swallow exceptions. Catch only to add context, translate, or recover;
+  chain with `from`.
+
+## Async and concurrency
+
+- Every I/O call is non-blocking within the request path. Blocking the loop
+  stalls every in-flight request.
+- No synchronous drivers, no `sleep`, no synchronous file or network I/O inside
+  a request handler.
+- Unavoidable blocking or CPU-heavy work goes to a background task or a thread,
+  never the event loop.
+- Every outbound call has an explicit timeout.
+- Work that must survive a crash is never fire-and-forget; it goes to the job
+  queue.
+
+## Transactions and consistency
+
+- The **service** owns transaction boundaries. Repositories never commit.
+- Keep transactions short. **No network calls inside a transaction.**
+- One transaction scope per request.
+- Optimistic concurrency for user-edited aggregates: a version column, 409 on
+  mismatch.
+- A state change that also produces an event writes both in the same
+  transaction, then publishes. Never two independent writes that can
+  half-succeed.
+
+## Configuration
+
+- All configuration is read in one place, validated at startup, and injected.
+  Nothing reads the environment directly.
+- Secrets come from the secret manager, never from the repository or an image.
+- Missing or malformed configuration fails fast at boot, not on first request.
+
+## Logging
+
+- Structured JSON logs with `request_id`, `tenant_id`, and `user_id` (ids only)
+  bound per request.
+- Redact passwords, tokens, authorization headers, payment data, and contact
+  details by default.
+- Levels: `error` needs a human; `warning` is degraded but recoverable; `info`
+  is business milestones; `debug` is off in production.
+
+## Outbound integrations
+
+- Wrap each third party behind an interface the service depends on, so it can
+  be faked in tests and replaced without touching business logic.
+- Timeouts, bounded retries with backoff and jitter, and a circuit breaker for
+  flaky dependencies.
+- Inbound webhooks: verify the signature over the raw body, persist the event,
+  process asynchronously, dedupe by event id.
+
+## Performance
+
+- No N+1 access. Load related data explicitly, or make accidental lazy loads
+  fail loudly.
+- Anything that may exceed ~1 s, or grows with data size, becomes a job.
+- Inspect the plan for new non-trivial queries.
+- Stream large responses; do not build them in memory.
+- Cache only with an explicit TTL and invalidation strategy, and never cache an
+  authorization decision across users.
+
+## Process model
+
+- The HTTP process and the worker process run from the same codebase and scale
+  independently.
+- Create clients and connections at startup and close them on shutdown.
+- Handle termination signals gracefully: stop accepting, drain, exit.
+- Liveness and readiness are separate endpoints; readiness checks dependencies.
+- Interactive API documentation is disabled or authenticated in production.
+
+## Code quality gates
+
+Run from `AGENTS.md`: `{{ check_command }}` runs every gate CI runs, in CI's
+order. Two entry points, one list: `make check` and `uv run python -m
+tools.check` are the same gates, for shells with and without `make`. The
+same gates exist in three places on purpose: a gate only in a hook can be
+skipped with `--no-verify`, and a gate only in CI is found after a push.
+
+| Gate | Runs | Configured in |
+|---|---|---|
+| format + lint | `ruff` (rule set in `pyproject.toml`), `ruff format --check` | `[tool.ruff]` |
+| types | `mypy --strict {{ backend_root }}` | `[tool.mypy]` |
+| tests | `pytest`, warnings are errors | `[tool.pytest.ini_options]` |
+| module boundaries | `node docs/architecture/backend.verify.mjs` | below |
+| decision drift | `node docs/architecture/decisions/verify.mjs` | `decisions/README.md` |
+
+- **The rule set is the code-smell list.** Ruff selects bugbear (`B`), bandit
+  (`S`), flake8-builtins (`A`), imports (`I`), naming (`N`), pathlib (`PTH`),
+  datetime-safety (`DTZ`), async-safety (`ASYNC`), pylint complexity and
+  structure rules (`PL`), and more. A finding is fixed. If it is genuinely
+  wrong for a line, add `# noqa: <RULE> — <reason>` with the rule code exactly
+  as ruff prints it; a malformed noqa is removed by `ruff --fix` and blocks the
+  commit. A rule removed from the select list is a change to this document,
+  reviewed like code.
+- **`mypy --strict` has no per-module relaxations** except `tests/`, where
+  writing a typed test would obscure the assertion. Production code does not
+  get an exemption.
+- **Every gate runs from the project environment, never from a hook's isolated
+  one.** Ruff, mypy, pytest, and pre-commit are installed by `uv sync`; a
+  `pre-commit` definition only says *when* to run them. A tool run from an
+  isolated pre-commit environment has no third-party stubs and no scripts
+  (`node`), so it would report false results. This is why tool hooks are
+  `local`.
+- `pyproject.toml`, `.pre-commit-config.yaml`, `Makefile`, `tools/check.py`, and
+  `.github/workflows/verify.yml` ship generated and ready. Do not re-create
+  them by hand; change them in the template or here, together.
+
+The module and layer rules are **not** a style guide. They must fail CI, not
+survive review:
+
+- **Layer direction:** imports flow `router → service → repository` only, and
+  `core` imports nothing from `modules`.
+- **Module independence:** no module imports another module's `repository`,
+  `schemas`, or storage.
+- **Contract isolation:** `schemas` imports no persistence type.
+
+These are checked by `node docs/architecture/backend.verify.mjs`, which runs on
+every commit and in CI as `boundary-check`. It reads every file under `app/`
+and fails on:
+
+- a layer importing a layer above it (`repository` importing `service`);
+- `core` importing anything from `modules`;
+- one module importing another module's `repository`, `schemas`, or storage;
+- a sibling import the layer does not own (`router` importing `repository`).
+
+The single legal cross-module edge is a service calling another module's
+**service**; anything else across a module boundary fails.
+
+It is deliberately structural: it reads imports, not behaviour, so it cannot be
+satisfied by a comment, a re-export, or a lazy import inside a function. When
+the first module exists, run it once and confirm it passes; if it reports a
+violation you disagree with, the fix is in `backend.md` and the rule table,
+never a bypass in the script.

@@ -1,0 +1,59 @@
+# Every gate CI runs, in the order CI runs it. `make check` runs the same list
+# locally: a gate either passes silently or fails the build.
+# See docs/architecture/backend.md and docs/architecture/decisions/README.md.
+
+.DEFAULT_GOAL := help
+.PHONY: help setup hooks fmt fmt-check lint types test boundary adr drift check clean
+
+help:
+	@echo "make setup     one-time: install dependencies and git hooks"
+	@echo "make hooks     install the pre-commit hook (runs on every commit)"
+	@echo "make fmt       format (writes)"
+	@echo "make fmt-check format check (no writes)"
+	@echo "make lint      ruff lint"
+	@echo "make types     mypy --strict"
+	@echo "make test      pytest"
+	@echo "make boundary  layer and module boundaries (docs/architecture/backend.verify.mjs)"
+	@echo "make adr       architecture decision record drift"
+	@echo "make check     everything CI runs"
+
+setup: hooks
+	uv sync --all-groups
+
+hooks:
+	uv sync --all-groups
+	uv run pre-commit install
+
+fmt:
+	uv run ruff format .
+	uv run ruff check --fix .
+
+fmt-check:
+	uv run ruff format --check .
+	uv run ruff check .
+
+lint:
+	uv run ruff check .
+
+types:
+	uv run mypy --strict {{ backend_root }}
+
+test:
+	uv run pytest
+
+boundary:
+	node docs/architecture/backend.verify.mjs
+
+adr:
+	node docs/architecture/decisions/verify.mjs
+
+check: fmt-check lint types test boundary adr
+	@echo "check: all gates passed"
+
+# Same gates as `make check` in one command, for shells without make
+# (Windows/PowerShell) and as the single implementation `make check` mirrors:
+# `uv run python -m tools.check`.
+
+clean:
+	rm -rf .pytest_cache .mypy_cache .ruff_cache
+	find . -name __pycache__ -type d -prune -exec rm -rf {} +

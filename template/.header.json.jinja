@@ -1,0 +1,81 @@
+{
+  "template": {
+    "source": {{ _copier_conf.src_path | string | tojson }},
+    "copier_version": {{ _copier_conf.version | string | tojson }},
+    "generated_at": "2026-11-07"
+  },
+  "project_type": {{ project_type | tojson }},
+  "scope": {
+    "backend": {{ backend | tojson }},
+    "frontend": {{ frontend | tojson }}
+  },
+  "tools": {
+    "setup": {{ setup_command | tojson }},
+    "dev": {{ dev_command | tojson }},
+    "dev_server_probe": {{ dev_server_probe | tojson }},
+    "check": {{ check_command | tojson }},
+{% if frontend %}
+    "api_types": {{ api_client_command | tojson }},
+    "fsd_lint": {{ fsd_lint_command | tojson }},
+    "package_manager": {{ package_manager | tojson }},
+    "frontend_commands": {
+      "format": "{{ package_manager }} run format:check",
+      "lint": "{{ package_manager }} run lint",
+      "types": "{{ package_manager }} run typecheck",
+      "tests": "{{ package_manager }} run test",
+      "e2e": "{{ package_manager }} run test:e2e"
+    },
+{% endif %}
+{% if backend %}
+    "migrations": {{ migrate_command | tojson }},
+{% endif %}
+    "acceptance": {{ dev_server_probe | tojson }}
+  },
+  "paths": {
+{% if backend %}
+    "backend_root": {{ backend_root | tojson }},
+    "backend_toolchain": ["pyproject.toml", ".python-version", ".pre-commit-config.yaml", "Makefile", ".github/workflows/verify.yml"],
+    "migrations_root": {{ migrations_root | tojson }},
+{% endif %}
+{% if frontend %}
+    "frontend_root": {{ frontend_root | tojson }},
+    "frontend_toolchain": ["package.json", "eslint.config.mjs", "prettier.config.mjs", "tsconfig.base.json", "tsconfig.json", "vite.config.ts", "vitest.config.ts", "playwright.config.ts", ".husky/pre-commit", ".github/workflows/verify.yml"],
+{% endif %}
+    "docs_root": "docs"
+  },
+  "agents": {
+    "entrypoint": "AGENTS.md",
+    "pointer_files": [
+      "CLAUDE.md",
+      "Gemini.md",
+      ".qoder/rules.md",
+      ".github/copilot-instructions.md"
+    ],
+    "tiering_table": "docs/architecture/path-rules.md#which-rules-apply-to-this-path",
+    "adr_dir": "docs/architecture/decisions",
+    "adr_drift_check": "node docs/architecture/decisions/verify.mjs",
+{% if backend %}
+    "boundary_check": "node docs/architecture/backend.verify.mjs",
+{% endif %}
+{% if frontend %}
+    "frontend_drift_check": "node docs/architecture/frontend.verify.mjs",
+{% endif %}
+    "sources": {
+      "scope": ["AGENTS.md", "docs/architecture/overview.md"],
+{% if backend %}
+      "backend_rules": ["AGENTS.md", "docs/architecture/backend.md", "docs/architecture/database.md"],
+{% endif %}
+{% if frontend %}
+      "frontend_rules": ["AGENTS.md", "docs/architecture/frontend.md"],
+{% endif %}
+      "commands": ["AGENTS.md", "Makefile", "package.json"],
+      "acceptance_check": [".header.json", "AGENTS.md"],
+{% if backend %}
+      "auth_decisions": ["docs/architecture/security.md"],
+{% else %}
+      "auth_decisions": "not-in-repo: owned by the API repository; link its ADR-001 URL in docs/architecture/decisions/README.md",
+{% endif %}
+      "business_rules": ["docs/product/business-rules.md"]
+    }
+  }
+}

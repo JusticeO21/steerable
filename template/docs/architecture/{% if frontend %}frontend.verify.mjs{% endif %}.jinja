@@ -1,0 +1,183 @@
+// Enforces the Feature-Sliced Design rules in docs/architecture/frontend.md.
+// Structural only: no third-party packages, so it runs before dependencies are
+// installed and cannot be skipped by a missing dev dependency.
+//
+//   node docs/architecture/frontend.verify.mjs
+//
+// Exits 1 and prints every violation. A violation is a defect in the code, not
+// in this script; fix the import or the file location, never the rule.
+
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { basename, dirname, join, relative, resolve, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const here = dirname(fileURLToPath(import.meta.url))
+const repoRoot = resolve(here, '..', '..')
+const srcRoot = join(repoRoot, '{{ frontend_root }}', 'src')
+
+// Most dependent first. A layer may import only from layers to its right.
+const LAYERS = ['app', 'pages', 'widgets', 'features', 'entities', 'shared']
+const SEGMENTS = ['ui', 'model', 'api', 'lib', 'config']
+const SLICED = ['pages', 'widgets', 'features', 'entities']
+const CODE = /\.(ts|tsx)$/
+const BANNED_SEGMENTS = ['components', 'hooks', 'utils', 'helpers', 'types']
+
+const errors = []
+
+// 1. The layer order documented in frontend.md is the one enforced here.
+const docPath = join(here, 'frontend.md')
+if (existsSync(docPath)) {
+  const doc = readFileSync(docPath, 'utf8')
+  const line = doc.match(/^app\s*->\s*pages.*$/m)
+  const documented = line ? line[0].match(/[a-z]+/g).filter((word) => LAYERS.includes(word)) : []
+  if (documented.join(' > ') !== LAYERS.join(' > ')) {
+    errors.push(
+      `frontend.md documents "${documented.join(' > ') || 'no layer order'}" but ` +
+        `frontend.verify.mjs enforces "${LAYERS.join(' > ')}"`,
+    )
+  }
+}
+
+function walk(dir) {
+  const out = []
+  let entries
+  try {
+    entries = readdirSync(dir)
+  } catch {
+    return out
+  }
+  for (const name of entries) {
+    if (name === 'node_modules' || name.startsWith('.')) continue
+    const full = join(dir, name)
+    if (statSync(full).isDirectory()) out.push(...walk(full))
+    else out.push(full)
+  }
+  return out
+}
+
+function identify(absPath) {
+  const rel = relative(srcRoot, absPath).split(sep)
+  const layer = rel[0]
+  if (!LAYERS.includes(layer)) return null
+  if (layer === 'app' || layer === 'shared') return { layer, slice: null, rel }
+  // A slice is a directory with at least one segment; pages/index.ts is a stray
+  // file at the layer root, not a slice named "index.ts".
+  if (rel.length < 4) return { layer, slice: null, rel }
+  return { layer, slice: rel[1], rel }
+}
+
+// Resolves an import specifier to a file inside src/, or null when it points
+// outside src/ (a package, a test file without its own sibling, node types).
+function resolveImport(specifier, fromFile) {
+  let base
+  if (specifier.startsWith('@/')) base = join(srcRoot, specifier.slice(2))
+  else if (specifier.startsWith('./') || specifier.startsWith('../'))
+    base = resolve(dirname(fromFile), specifier)
+  else return null
+
+  const candidates = [
+    base,
+    ...['.ts', '.tsx', '/index.ts', '/index.tsx'].map((suffix) => `${base}${suffix}`),
+  ]
+  return (
+    candidates.find((candidate) => existsSync(candidate) && statSync(candidate).isFile()) ?? null
+  )
+}
+
+function specifiers(source) {
+  const found = []
+  const patterns = [
+    /\bfrom\s+['"]([^'"]+)['"]/g,
+    /\bimport\s+['"]([^'"]+)['"]/g,
+    /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+    /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+  ]
+  for (const pattern of patterns) {
+    let match
+    while ((match = pattern.exec(source)) !== null) found.push(match[1])
+  }
+  return found
+}
+
+const files = walk(srcRoot)
+if (files.length === 0) {
+  console.log(`frontend-check: no source under {{ frontend_root }}/src yet; nothing to verify`)
+  process.exit(0)
+}
+
+for (const file of files) {
+  const id = identify(file)
+  if (!id) continue
+  const relFile = relative(repoRoot, file).split(sep).join('/')
+
+  // 2. No catch-all segment folders; segments are named by purpose.
+  if (id.slice) {
+    const segment = id.rel[2]
+    if (segment && BANNED_SEGMENTS.includes(segment)) {
+      errors.push(
+        `${relFile}: "${segment}/" is not an FSD segment; name it by purpose (${SEGMENTS.join(', ')})`,
+      )
+    }
+  }
+
+  // 3. A slice has one public entry point, at its root.
+  if (id.slice && id.slice !== 'index.ts' && basename(file) === 'index.ts') {
+    errors.push(
+      `${relFile}: export through ${id.layer}/${id.slice}/index.ts, not a nested index.ts`,
+    )
+  }
+
+  if (!CODE.test(file)) continue
+
+  const source = readFileSync(file, 'utf8')
+
+  // 4. The import rule: only layers strictly below, never across slices.
+  const imports = specifiers(source)
+
+  for (const specifier of imports) {
+    const target = resolveImport(specifier, file)
+    if (!target) continue
+    const to = identify(target)
+    if (!to) continue
+    const toRel = relative(repoRoot, target).split(sep).join('/')
+
+    const fromIndex = LAYERS.indexOf(id.layer)
+    const toIndex = LAYERS.indexOf(to.layer)
+    if (toIndex < fromIndex) {
+      errors.push(
+        `${relFile}: "${id.layer}" imports "${to.layer}" (${toRel}); a layer may only import from below`,
+      )
+      continue
+    }
+    if (toIndex === fromIndex && id.slice && to.slice && id.slice !== to.slice) {
+      const viaCrossImport = to.rel[2] === '@x'
+      if (id.layer === 'entities' && viaCrossImport) continue
+      errors.push(
+        `${relFile}: "${id.layer}/${id.slice}" imports "${to.layer}/${to.slice}" (${toRel}); same-layer slices must not import each other`,
+      )
+    }
+  }
+
+  // 5. Public API: cross-slice imports go through the slice root.
+  for (const specifier of imports) {
+    if (!specifier.startsWith('@/')) continue
+    const parts = specifier.slice(2).split('/')
+    if (!SLICED.includes(parts[0]) || parts.length <= 2) continue
+    const target = resolveImport(specifier, file)
+    const to = target ? identify(target) : null
+    if (to && to.slice === id.slice && to.layer === id.layer) continue
+    errors.push(
+      `${relFile}: deep import "${specifier}"; import from @/${parts[0]}/${parts[1]} (the slice's index.ts)`,
+    )
+  }
+}
+
+if (errors.length) {
+  console.error(`frontend-check: ${errors.length} violation(s)`)
+  for (const line of errors) console.error(`  ${line}`)
+  process.exit(1)
+}
+
+console.log(
+  `frontend-check: ${files.length} file(s) follow the FSD layer, slice, and public-API rules`,
+)

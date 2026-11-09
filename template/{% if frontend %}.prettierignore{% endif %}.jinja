@@ -1,0 +1,17 @@
+# Generated, vendored, or written by another tool. Never hand-formatted.
+node_modules
+dist
+{{ frontend_root }}/dist
+playwright-report
+test-results
+coverage
+pnpm-lock.yaml
+# Documentation is owned by the AGENTS.md rules, not by the frontend formatter.
+*.md
+.header.json
+# GitHub Actions YAML: the `on:`/`jobs:` key handling differs from Prettier's.
+.github/
+# Structural checkers that also ship to repos with no frontend; keep one style.
+docs/architecture/backend.verify.mjs
+docs/architecture/decisions/verify.mjs
+{{ frontend_root }}/src/shared/api/schema.d.ts

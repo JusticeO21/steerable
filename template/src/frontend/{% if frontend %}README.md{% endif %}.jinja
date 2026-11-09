@@ -1,0 +1,34 @@
+# {{ frontend_root }} — Feature-Sliced Design app
+
+See [docs/architecture/frontend.md](../../docs/architecture/frontend.md) for the
+layer, slice, segment, and public-API rules. Three tools enforce them:
+
+| Command | What it checks |
+|---|---|
+| `pnpm lint` | ESLint: types-aware rules, React, a11y, layer imports |
+| `pnpm lint:fsd` | `docs/architecture/frontend.verify.mjs` (structure) then ESLint |
+| `pnpm check` | everything CI runs: format, lint, FSD, types, tests |
+
+```
+{{ frontend_root }}/
+  index.html                    # Vite entry
+  src/
+    app/index.tsx               # composition root: mounts pages, wires providers
+    pages/
+      home/                     # a slice: one route-level screen
+        ui/HomePage.tsx
+        ui/HomePage.test.tsx    # colocated test
+        model/content.ts        # every user-visible string this page renders
+        index.ts                # the slice's public API
+    widgets/  features/  entities/  # add slices here as the product grows
+    shared/                     # business-agnostic: ui, api, lib, config, i18n
+    test-setup.ts               # Vitest setup, imported by vitest.config.ts
+```
+
+`pages/home/` is a reference slice, not a recommendation: it exists so every
+gate has something real to check on the first commit. Replace it with the first
+real screen.
+
+Rules no tool can check, and that review must: name slices with domain terms
+from `docs/product/business-rules.md`; promote code down a layer only when a
+second consumer appears; keep business rules out of components.

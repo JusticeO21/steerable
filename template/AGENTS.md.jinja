@@ -1,0 +1,311 @@
+# AGENTS.md
+
+Entry point for AI coding agents and new engineers. Read this first, then follow
+links for depth. Keep this file short; detail belongs in `docs/`.
+
+Copier generated this file for a **{{ project_type }}** repository, together with
+`CLAUDE.md`, `Gemini.md`, `.qoder/rules.md`, and `.github/copilot-instructions.md`
+(which point here) and `.header.json` (which records the template source for
+`copier update`).
+
+## START HERE
+
+**Agents: before the first edit, prove you are working from this version of the
+project, not from template defaults.** In one message, report answers to these
+five checks. If a check does not hold, stop that step, tell the user, and fix it
+or ask. Do not skip a check because an answer looks obvious.
+
+1. **Ownership of run-start facts.** Decide what every non-rule fact in this
+   file comes from, and write it into the relevant `.header.json` field:
+   commands from the file that runs them (`commands`), paths that exist
+   (`paths`), facts from another file (`AGENTS.sources`), facts outside this
+   repo as `not-in-repo` with a link. A fact with no owner stays an assumption
+   — say so, never guess.
+2. **Assumptions are labeled.** Run `grep -rn "CHECK:confirm" AGENTS.md docs/`
+   and `grep -rn "TODO: replace" AGENTS.md docs/`. Neither should print
+   anything by itself: these markers label template defaults — the assumed
+   stack, the assumed commands — not tasks. An assumption you keep is not a
+   defect; an assumption presented as fact is. When the project can settle one
+   (a `check` script that exists, a stack chosen in an ADR), replace the line.
+3. **Sources are declared.** Read `AGENTS.sources` in `.header.json`. A fact
+   that comes from another file lists that file there. A fact that is not in
+   this repository is marked `not-in-repo` and carries a link, never a guess.
+4. **Scope is known.** `.copier-answers.yml` records the answers used to
+   generate this project, `backend` and `frontend` among them. If a section of
+   this file describes code that is not in the repository, or a command that
+   does not exist, stop and tell the user before editing code. Do not work
+   around a scope mismatch; it means the repository was generated with the
+   wrong answers.
+5. **Acceptance check.** `tools.acceptance` in `.header.json` is the command
+   that proves the project builds and serves. Run it once before the first
+   change. If it fails, that is the first task, not a reason to skip it.
+
+A missing check is a blocker on every edit, not only on setup. Do not silently
+invent a rule, command, path, or ADR that this file does not have.
+
+## Project summary
+
+{{ product_summary }}
+
+## Repository map
+
+| Path | Purpose |
+|---|---|
+{%- if backend %}
+| `{{ backend_root }}/` | Backend: HTTP routes, domain services, data access |
+| `{{ migrations_root }}/` | Database migrations (forward-only) |
+{%- endif %}
+{%- if frontend %}
+| `{{ frontend_root }}/` | Frontend: Feature-Sliced Design app, pages, shared |
+{%- endif %}
+{%- if repo_layout %}
+| `{{ repo_layout }}` | Declared at generation time; describe each entry during first-run fill |
+{%- endif %}
+| `docs/` | All documentation (see the index below) |
+{%- if frontend %}
+
+Frontend unit tests are colocated with their slice (`*.test.tsx`).
+{%- endif %}
+
+## Documentation index
+
+| Topic | File |
+|---|---|
+| Which rules apply to this path | [docs/architecture/path-rules.md](docs/architecture/path-rules.md) |
+| System overview | [docs/architecture/overview.md](docs/architecture/overview.md) |
+{%- if backend %}
+| Backend | [docs/architecture/backend.md](docs/architecture/backend.md) |
+{%- endif %}
+{%- if frontend %}
+| Frontend (FSD) | [docs/architecture/frontend.md](docs/architecture/frontend.md) |
+{%- endif %}
+{%- if backend %}
+| Database | [docs/architecture/database.md](docs/architecture/database.md) |
+{%- endif %}
+| Security | [docs/architecture/security.md](docs/architecture/security.md) |
+| Decisions (ADRs) | [docs/architecture/decisions/](docs/architecture/decisions/README.md) |
+| Business rules | [docs/product/business-rules.md](docs/product/business-rules.md) |
+| Testing | [docs/engineering/testing.md](docs/engineering/testing.md) |
+| Code review | [docs/engineering/code-review.md](docs/engineering/code-review.md) |
+
+A link to a missing file is a defect; a fact without a link to its source
+(`CHECK:confirm`) is a defect on the same level.
+
+## Commands
+
+```bash
+# one-time setup
+{{ setup_command }}
+
+# run locally
+{{ dev_command }}
+{%- if frontend %}
+
+# {{ frontend_language }}: lint
+{{ frontend_lint_command }}
+
+# {{ frontend_language }}: types
+{{ frontend_typecheck_command }}
+
+# {{ frontend_language }}: unit/component tests
+{{ frontend_unit_command }}
+
+# Feature-Sliced Design boundaries
+{{ fsd_lint_command }}
+{%- endif %}
+{%- if backend %}
+
+# backend: lint
+{{ backend_lint_command }}
+
+# backend: types
+{{ backend_types_command }}
+
+# backend: tests
+{{ backend_test_command }}
+
+# migrations
+{{ migrate_command }}
+{%- endif %}
+{%- if project_type == 'full-stack' %}
+
+# end-to-end
+{{ e2e_command }}
+{%- endif %}
+
+# everything CI runs
+{{ check_command }}
+```
+
+Before declaring any task done: `{{ check_command }}` must pass.
+
+**CI runs, in order** (this list is the contract; `{{ check_command }}` must run
+exactly these):
+
+{{ ci_gates | indent(2, true) }}
+
+**`CHECK:confirm` means this command is the template default and no one has run
+it in this repository yet.** Run it once; if it fails or the tool is not
+installed, fix the repository or correct the line. Then delete the marker.
+Changing a command here without changing the file that executes it (`Makefile`,
+`package.json`, the CI workflow) is a template lie, not a fix.
+
+## Rules for agents (non-negotiable)
+
+### General
+
+1. **Read before writing.** Check the relevant doc in `docs/` and the existing
+   patterns before changing anything.
+2. **Business rules live in one place.** Never invent or alter a rule; consult
+   `docs/product/business-rules.md`. If a rule is missing or ambiguous, ask.
+   Rule IDs (`BR-<AREA>-<NN>`) come from: {{ business_rules_source }}
+3. **Never log or commit secrets or PII.** Config comes from environment
+   variables only.
+4. **Tests accompany behavior changes.** A new behaviour or a bug fix starts
+   with a test that fails without the change; see "Proving a test" in
+   `testing.md`.
+5. **No new dependency without justification** in the PR description
+   (maintenance, size, license, alternatives).
+6. **Small, focused changes.** One concern per PR. No unrelated refactors.
+7. **Do not change the public API contract silently.** Breaking changes need a
+   versioning plan and an ADR.{% if frontend %} After changing a route or schema,
+   run `{{ api_client_command }}`.{% endif %}
+{%- if backend %}
+
+8. **Respect the layer direction:** router → service → repository. Routers
+   never touch the data store, services never import the web framework,
+   repositories hold **every** data-store call and never commit.
+9. **Services own the transaction boundary.** Repositories participate and never
+   commit. One transaction scope per request. No network calls inside a
+   transaction.
+10. **Every query is tenant-scoped.** Repositories always filter by tenant, and
+    the store refuses cross-tenant access independently. Both layers are
+    mandatory; a test must prove the second.
+11. **Never edit an applied migration.** Add a new one; migrations must be
+    backward compatible (expand/contract).
+12. **Every route validates input and declares its required permission.** A
+    route that is neither authenticated nor explicitly public fails CI.
+13. **Never block the event loop.** No sync I/O or CPU-heavy work inside an
+    `async` handler. Use async libraries or offload to a job.
+14. **Slow or failure-prone side effects go to background jobs.**
+    Task handlers must be idempotent.
+15. **Complete type annotations**, clean under the project's strictest type
+    checker.
+    No bare `except`, no type-ignore comment without a stated reason.
+{%- endif %}
+{%- if frontend %}
+{%- set f = 16 if backend else 8 %}
+
+{{ f }}. **Respect the FSD layer rule:** a module imports only from layers strictly
+   below it (`app > pages > widgets > features > entities > shared`). Slices in
+   the same layer never import each other.
+{{ f + 1 }}. **Import slices only through their public API** (`index.ts`). No deep
+   imports into another slice's internals.
+{{ f + 2 }}. **Place code by FSD rules** (decision table in `frontend.md`). Do not
+   create `utils/`, `helpers/`, `types/` dumping grounds; name segments by
+   purpose (`ui`, `model`, `api`, `lib`, `config`).
+{{ f + 3 }}. **No business logic in `shared/`** and no data fetching in `shared/ui`.
+{{ f + 4 }}. **Never hand-write API types.** They are generated from the OpenAPI
+   schema into `shared/api`{% if api_types_owner == 'served-by-this-repo' %} (this
+   repository serves that schema){% else %} (served by another repository; this
+   one does not own the contract){% endif %}.
+{{ f + 5 }}. **All user-facing text is data.** No human-readable string literals in JSX
+   or in `alt`, `title`, `placeholder`, or `aria-*` attributes. Text comes from
+   the owning slice's content module or `shared/i18n`.
+{%- endif %}
+
+## How to build a feature
+
+Follow the loop in order. Each step names what stops it: a question for the
+human, not a guess.
+
+1. **Find the rule.** Open `docs/product/business-rules.md` and locate the
+   `BR-<AREA>-<NN>` entries the feature implements. **Stop and ask** if a rule
+   is missing, ambiguous, or you would have to invent one.
+2. **Decide whether it is a decision.** If the feature needs a choice between
+   viable alternatives that would be costly to reverse (a technology, a storage
+   model, how sessions work), it needs an ADR first: follow
+   `docs/architecture/decisions/README.md`. **Stop and ask** the human to decide;
+   do not pick. If the docs already prescribe the approach, it is a rule, not a
+   decision, and you skip this step.
+3. **Place it.** Frontend: use the decision table in `frontend.md` (page, widget,
+   feature, entity, or shared) and the slice's `index.ts`. Backend: router →
+   service → repository, tenant-scoped, permission declared on the route.
+4. **Write the failing test.** One test per behaviour, named per
+   `testing.md`. Run it. It must fail because the behaviour is missing, not
+   because of a typo. **Stop** if you cannot make it fail: the behaviour is not
+   understood yet, or the test cannot see it.
+5. **Write the minimum code** until the test passes. Then the rest of the
+   behaviours, test by test.
+6. **Prove the guard** for anything risky (tenant isolation, permissions,
+   money, idempotency): revert the code, watch the test fail, restore. Paste
+   the red and green runs in the PR.
+7. **Run `{{ check_command }}`.** It must pass before you say the feature is
+   done. Update docs if a rule, contract, or architecture changed.
+
+Skip a step only by saying so in the PR, with the reason. "The tests came
+later" is not a reason; it is the step being skipped.
+
+## Conventions
+
+{%- set conv = [] %}
+{%- if frontend %}{% set _ = conv.append("- **" ~ frontend_language ~ ":** `strict` mode, no `any` without a justifying comment. Components `PascalCase.tsx`; other files and slice folders `kebab-case`. Package manager: `" ~ package_manager ~ "`. UI: " ~ design_system ~ ". API types: `" ~ api_client_command ~ "`" ~ (" (types live in `shared/api`; the API contract is owned by the serving service, so a schema change is communicated, never hand-edited)." if api_types_owner == "remote-schema" else ".")) %}{% endif %}
+{%- if backend %}{% set _ = conv.append("- **Python:** `" ~ backend_linter ~ "` (lint + format), `mypy --strict`, `snake_case` functions/modules, `PascalCase` classes. Pydantic models for all I/O boundaries.") %}{% endif %}
+{%- if backend %}{% set _ = conv.append("- **DB:** " ~ ("`snake_case` tables and columns, plural table names, UUIDv7 primary keys generated by the app." if db_conventions == "snake-case-uuidv7" else ("`snake_case` tables and columns, plural table names, `bigint` serial primary keys." if db_conventions == "snake-case-serial" else "`camelCase` PostgreSQL identifiers, quoted where needed; CHECK:confirm the primary key strategy against `database.md`."))) %}{% set _ = conv.append("- **Errors:** raise typed error subclasses in the backend; one exception handler maps them to HTTP. Never raise strings or return error dicts by hand.") %}{% endif %}
+{%- set _ = conv.append("- **Dates:** store and transmit UTC ISO-8601. **Money:** integer minor units + currency code, never floats.") %}
+{%- set _ = conv.append("- **Commits:** Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`).") %}
+{%- set _ = conv.append("- **Toolchain defaults.** `AGENTS.tools` in `.header.json` lists the setup and dev commands used at generation time. Anything in `docs/` wins over a value here.") %}
+
+{{ conv | join('
+') }}
+
+## Which rules apply to this path
+
+{{ tiering_hook }}
+
+The canonical table is "Which rules apply to this path" in
+[docs/architecture/path-rules.md](docs/architecture/path-rules.md). When it and
+a specific doc disagree, the specific doc wins and the table is fixed in the
+same PR.
+
+## When to write an ADR
+
+Write one in `docs/architecture/decisions/` when a decision is hard to reverse,
+affects multiple modules, or introduces a new technology. Use the next number
+and the structure of `000-template.md`: context, options considered with why
+each was rejected, decision, consequences (positive and cost), and when to
+revisit.
+
+### Reading an ADR's status
+
+`Accepted` means the decision was agreed, **not** that the code exists. Only
+`Implemented` means that.
+
+- An ADR is `Implemented` only when every path in its **Implemented in** field
+  exists and every command in its **Verified by** field exists in the repository
+  and is run by CI.
+- With open items under **Follow-ups**, treat the ADR as partially built.
+- Before citing an ADR as a constraint, check its status and open the
+  `Implemented in` paths. If it is `Proposed` or `Accepted`, the rule is not
+  yet a fact about this repository. Say so instead of refusing to write the
+  first implementation of it.
+- **Must not** change an ADR's status without opening the paths and running the
+  check. Never set `Implemented` from intent.
+- **Must not** edit or delete a decided ADR. To reverse one, write a new ADR
+  that `Supersedes` it and set the old one's status to
+  `Superseded by ADR-NNN`.
+
+The `adr-drift` CI gate runs `docs/architecture/decisions/verify.mjs`, which fails
+when a path in `Implemented in` is missing, when a `Verified by` command does not
+exist in this repository, or when a status is outside the allowed set.
+
+## Definition of done
+
+- Behavior matches business rules; acceptance criteria met
+- Tests added/updated; `{{ check_command }}` passes
+- Docs updated if architecture, rules, or contracts changed; API types
+  regenerated{% if frontend %} (`{{ api_client_command }}`){% endif %}
+{%- if backend %}
+- Migration is backward compatible with the previous app version
+- Observability added for new critical paths (logs, metrics)
+{%- endif %}

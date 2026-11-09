@@ -1,0 +1,92 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    name: render every scope
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+
+      - run: uv tool install copier
+
+      - name: Render all scopes and check the output
+        run: uv run python check-template.py
+
+  generated-gates:
+    name: generated repo passes its own gates (${{ matrix.scope }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scope: [full-stack, frontend-only, backend-only]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: uv tool install copier
+
+      - name: Render the scope with its defaults
+        shell: bash
+        run: |
+          case "${{ matrix.scope }}" in
+            full-stack)    backend=true;  frontend=true ;;
+            frontend-only) backend=false; frontend=true ;;
+            backend-only)  backend=true;  frontend=false ;;
+          esac
+          uv run python -m copier copy --trust --defaults --overwrite \
+            -d backend=$backend -d frontend=$frontend \
+            . "$RUNNER_TEMP/generated"
+
+      # husky's installer fails outside a git work tree, and pnpm runs it from
+      # the `prepare` lifecycle script during install.
+      - name: Initialize the generated repository
+        working-directory: ${{ runner.temp }}/generated
+        run: git init --quiet
+
+      - name: Set up the generated repository
+        working-directory: ${{ runner.temp }}/generated
+        shell: bash
+        run: |
+          if [ "${{ matrix.scope }}" != "backend-only" ]; then
+            pnpm install --no-frozen-lockfile
+          fi
+          if [ "${{ matrix.scope }}" != "frontend-only" ]; then
+            uv sync --all-groups
+          fi
+
+      - name: Run the generated check command
+        working-directory: ${{ runner.temp }}/generated
+        shell: bash
+        run: |
+          if [ "${{ matrix.scope }}" = "frontend-only" ]; then
+            pnpm run check
+          else
+            uv run python -m tools.check
+          fi

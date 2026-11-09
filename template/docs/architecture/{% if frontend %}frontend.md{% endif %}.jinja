@@ -1,0 +1,265 @@
+# Frontend Architecture (Feature-Sliced Design)
+
+The frontend follows **[Feature-Sliced Design (FSD)](https://feature-sliced.design/)**: code is organized by **layers**, then **slices** (business domains), then **segments** (technical purpose). The structure is enforced by tooling, not by good intentions.
+
+## Stack
+
+{{ frontend_language }} strict, {{ ui_stack }}, TanStack Query (server state), React Hook Form + Zod (forms), {{ design_system }}, `openapi-typescript` + `openapi-fetch` (generated API types and client), Vitest + Testing Library, {% if project_type == 'full-stack' %}Playwright (e2e), {% endif %}**Steiger** (FSD linter) + ESLint.
+
+## The three levels of FSD
+
+```
+src/
+  app/        ─┐
+  pages/       │  LAYERS    (fixed, ordered by responsibility, top = most dependent)
+  widgets/     │
+  features/    │
+  entities/    │
+  shared/     ─┘
+```
+
+Inside a layer (except `app` and `shared`): **slices**, one per business domain/meaning, e.g. `entities/order`, `features/cancel-order`.
+Inside a slice (and in `app`/`shared`): **segments**, grouped by technical purpose: `ui`, `model`, `api`, `lib`, `config`.
+
+## Target layout
+
+```
+src/frontend/
+  src/
+    app/                          # initialization: wires everything together
+      providers/                  #   QueryClientProvider, Router, i18n, theme, error boundary
+      router/                     #   route table -> pages
+      styles/                     #   global CSS, design tokens
+      index.tsx
+    pages/                        # route-level screens (one slice per route)
+      orders-list/
+        ui/OrdersListPage.tsx
+        index.ts
+      order-details/
+      sign-in/
+    widgets/                      # large self-sufficient UI blocks composed of features + entities
+      app-header/
+      orders-table/
+        ui/OrdersTable.tsx
+        model/useOrdersTableState.ts
+        index.ts
+    features/                     # reusable user actions that deliver business value
+      create-order/
+        ui/CreateOrderForm.tsx
+        model/schema.ts           #   form Zod schema
+        api/create-order.ts       #   mutation
+        index.ts
+      cancel-order/
+      issue-refund/
+      invite-user/
+    entities/                     # business entities: what the product is "about"
+      order/
+        ui/OrderStatusBadge.tsx  OrderCard.tsx
+        model/types.ts  order-status.ts   #   domain types + pure helpers
+        api/order-queries.ts              #   query keys + fetchers
+        index.ts
+      user/
+      tenant/
+      plan/
+    shared/                       # reusable, business-agnostic foundation
+      api/                        #   http client, generated OpenAPI types, error mapping
+      ui/                         #   design-system components (Button, Modal, Input...)
+      lib/                        #   pure helpers (formatters, dates, hooks)
+      config/                     #   env, constants
+      i18n/                       #   translation setup
+      routes/                     #   route path constants
+  index.html
+```
+
+The toolchain lives at the repository root: `package.json`, `eslint.config.mjs`
+(ESLint flat config: types-aware rules, React, a11y, FSD layer imports),
+`prettier.config.mjs`, `tsconfig.base.json` + `tsconfig.json` (strict),
+`vite.config.ts`, `vitest.config.ts`, `playwright.config.ts`, and
+`.husky/pre-commit` (lint-staged).
+
+## The Import Rule (the core of FSD)
+
+> A module (file) in a slice may only import from slices on **layers strictly below** its own.
+
+```
+app  ->  pages  ->  widgets  ->  features  ->  entities  ->  shared
+(each layer may import only from layers to its right)
+```
+
+Consequences:
+
+1. `pages` import `widgets`, `features`, `entities`, `shared`. **Never** the reverse.
+2. **Slices on the same layer must not import each other.** `features/cancel-order` cannot import `features/issue-refund`. If they need shared logic, push it **down** (to `entities` or `shared`) or **up** (compose in a `widget`/`page`).
+3. `shared` and `app` have no slices; their segments may import each other within the layer (`app` may import everything below; `shared` imports nothing from above).
+4. Entity-to-entity references (e.g. `order` references `user`) use the explicit cross-import notation `@x`: `entities/user/@x/order.ts` exposes only what `order` needs. Use sparingly; prefer composing in higher layers.
+
+## Public API rule
+
+Every slice exposes a single entry point, `index.ts`, listing exactly what other modules may use.
+
+```ts
+// features/cancel-order/index.ts
+export { CancelOrderButton } from "./ui/CancelOrderButton";
+export { useCancelOrder } from "./model/useCancelOrder";
+```
+
+- Import from the slice root only: `import { CancelOrderButton } from "@/features/cancel-order"`.
+- **No deep imports** (`@/features/cancel-order/ui/CancelOrderButton`).
+- Within a slice, use relative imports; across slices, use the `@/` alias.
+- Export intentionally; do not `export *` everything. The public API is a contract.
+- Avoid circular dependencies between segments (`ui -> model -> api -> lib`; never upward).
+
+## Where does this code go? (decision table)
+
+| Question | Layer |
+|---|---|
+| App-wide setup (providers, router, global styles, error boundary)? | `app` |
+| A full screen mapped to a route? | `pages` |
+| A big, self-contained UI block reused on pages or used to keep pages thin (header, table with its filters)? | `widgets` |
+| A user action with business value (create, cancel, invite, filter orders)? | `features` |
+| A business concept with data and display (order, user, plan)? | `entities` |
+| Business-agnostic and reusable (button, http client, formatter)? | `shared` |
+
+Further rules of thumb:
+
+- **Start low, promote only when needed.** Keep code in the page/widget until a second consumer appears; then extract to `features`/`entities`. Avoid premature slicing: a feature used once can live in the page's `ui`/`model`.
+- A **feature is a verb** (`cancel-order`), an **entity is a noun** (`order`).
+- Do not make every button a feature. Only actions with business value that are reused or meaningfully isolated.
+- If a name needs "and", it is probably two slices.
+- Slice names are **domain terms from `business-rules.md`** (the ubiquitous language), kebab-case.
+
+## Segments
+
+| Segment | Contains |
+|---|---|
+| `ui` | Components, styles, formatters tied to the UI |
+| `model` | State, hooks, domain types, validation schemas, business-flavored logic |
+| `api` | Request functions, query keys, mutations, DTO mappers |
+| `lib` | Slice-internal helpers that don't fit elsewhere |
+| `config` | Constants, feature flags for the slice |
+
+Name segments by **purpose**, not by essence. **Do not create** `components/`, `hooks/`, `utils/`, `helpers/`, `types/` folders; those are anti-patterns in FSD because they say *what* a file is, not *why* it exists.
+
+## Data flow and state
+
+| State kind | Where it lives |
+|---|---|
+| Server data (lists, entities) | TanStack Query. Query keys and fetchers live in the owning **entity's** `api` segment (`orderKeys`, `fetchOrder`). |
+| Mutations | In the owning **feature's** `api`/`model` segment; they invalidate entity query keys on success. Features may import entities, so this respects the Import Rule. |
+| Forms | React Hook Form + Zod, in the feature's `model` (schema) and `ui` (form) |
+| URL state (filters, pagination, tabs) | Router search params; URL is source of truth; handled in the widget/page |
+| Local UI state | `useState`/`useReducer` inside the component |
+| Cross-cutting client state (theme, session user) | Small store in `app` or `entities/user/model`; keep minimal |
+
+Do not copy server data into a global store. Compose with props and slots first, context second.
+
+## API client and types (contract-first)
+
+- The backend publishes an OpenAPI schema (FastAPI). `{{ api_client_command }}` runs `openapi-typescript` and writes types to `shared/api/schema.d.ts` (committed, regenerated in CI; drift fails the build).
+- `shared/api` also contains the typed fetch client (`openapi-fetch`), auth/CSRF header injection, and mapping of the backend error envelope (`error.code`) to a typed `ApiError`.
+- **Never hand-write types for API payloads.** Entities may define *domain* types derived from the generated ones.
+- Entities wrap raw calls into domain-friendly functions in their `api` segment; pages/features never call the http client directly.
+
+## Component guidelines
+
+- Small, single-purpose components; composition over configuration props.
+- Presentational components in `ui`; logic and data access in `model`/`api` hooks.
+- **No business rules in components.** The backend is authoritative; the UI may mirror rules for UX (e.g. disable a button) but never as the only enforcement. Mirrored rules live in `entities/*/model` with a comment referencing the rule ID (e.g. `BR-ORD-04`).
+- Memoize only after measuring.
+- Avoid `dangerouslySetInnerHTML`; if unavoidable, sanitize with DOMPurify and document why.
+- Handle **loading, empty, error, and success** states for every data view. No blank screens.
+
+## Tooling enforcement
+
+Every rule below is a gate that ships with the repository and runs in CI.
+
+| Gate | Command | Enforces |
+|---|---|---|
+| Format | `pnpm format:check` | Prettier; the pre-commit hook rewrites staged files |
+| Lint | `pnpm lint` | `eslint . --max-warnings=0`: `strictTypeChecked`, React hooks, jsx-a11y, no `any`, no default exports, `max-lines` 600 (error) / 400 (warn), the content-literal rule, `import/no-cycle`, and `boundaries/dependencies` for the layer rule |
+| FSD | `pnpm lint:fsd` | `node docs/architecture/frontend.verify.mjs` (no same-layer imports, no deep imports, no catch-all segment folders, one `index.ts` per slice, `frontend.md` names the same layer order) then ESLint |
+| Types | `pnpm typecheck` | `tsc --noEmit` with `strict` and `noUncheckedIndexedAccess` |
+| Tests | `pnpm test` | Vitest + Testing Library |
+| E2E | `pnpm test:e2e` | Playwright; runs in CI once `e2e_gate` is on |
+| Everything | `pnpm check` | the five gates above, in CI order |
+
+- **Two checkers, on purpose.** The ESLint `boundaries` rule resolves aliases
+  and follows imports, which is how it sees an upward import; the node script
+  reads file paths, which is how it sees a deep import or a misnamed folder even
+  when nothing imports it. Neither subsumes the other. The boundaries rule
+  passes silently when an import cannot be resolved — run it against a real
+  violation after changing `boundaries/elements`.
+- Path alias `@/*` -> `{{ frontend_root }}/src/*`, declared in `tsconfig.base.json`, `vite.config.ts`, and `vitest.config.ts`.
+- No deep imports: `import { X } from '@/features/cancel-order'`, never `@/features/cancel-order/ui/X`.
+- Each slice ships colocated `*.test.tsx`/`*.test.ts`; a new slice without a test is a review defect.
+- Formatting is not reviewed. A `max-lines` warning is not a pass: split the file.
+
+## Accessibility (required)
+
+- Target WCAG 2.2 AA. Semantic HTML first; ARIA only when semantics are insufficient.
+- Full keyboard operability and visible focus. Every input has a label; errors are announced and associated with fields.
+- Color is never the only signal; contrast >= 4.5:1.
+- `eslint-plugin-jsx-a11y` and axe checks in CI. Accessible primitives live in `shared/ui` so features inherit them.
+
+## Performance
+
+- Route-level code splitting: lazy-load each `pages` slice from the `app/router`.
+- Budget: initial JS <= 200 KB gzipped for the main route; tracked in CI.
+- Responsive images with explicit dimensions and lazy loading; virtualize long lists; debounce expensive inputs.
+- Monitor Core Web Vitals (LCP < 2.5 s, INP < 200 ms, CLS < 0.1).
+
+## Security (client side)
+
+- No secrets in the bundle; everything shipped to the browser is public.
+- Tokens are never stored in `localStorage` or `sessionStorage`; the server's session cookie is the only credential the client sends.
+- CSRF: SameSite cookies plus a required anti-CSRF header, added centrally in `shared/api`.
+- Strict CSP; no inline scripts. Treat all API data as untrusted when rendering.
+
+## Error handling
+
+- Error boundaries at `app` level (global) and per `page` (screen-level fallback), reporting to error tracking (Sentry or equivalent).
+- Surface actionable messages using the stable `error.code`, mapped to i18n strings. Never show raw server text.
+
+## Content and internationalization
+
+All user-facing text is **data**, never a literal in JSX (`src/**/*.tsx`) or in `alt`, `title`, `placeholder`, or `aria-*`. Where that data lives depends on how many places own it:
+
+| Text is... | Lives in |
+|---|---|
+| Copy used by one page | `pages/<page>/model/content.ts` |
+| Copy used by one slice | `<layer>/<slice>/model/content.ts` |
+| Shared, translatable UI (nav labels, common actions, validation, `error.code` → message) | `shared/i18n` |
+
+- **Start without an i18n library.** A `content.ts` is a typed `as const` object; dynamic text is a function (`openLabel: (n: string) => \`Open invoice ${n}\``), so it is testable and greppable.
+- **Adopt `shared/i18n` when a second locale ships**, and move only the strings that locale needs. `content.ts` files become the default-locale message source. Do not introduce an i18n library "for later"; an unused key catalog rots faster than inline copy.
+- **Never create a root-level `src/content/` folder.** It is a second, unowned dumping ground that breaks the slice public-API rule.
+- Interface rules that apply to every string, whichever home it has:
+  - Keys are semantic (`invoices.empty.action`), not the English text.
+  - Interpolation is a function parameter, never string concatenation at the call site.
+  - The server returns `error.code` values from the envelope; the client maps codes to messages. Raw server text is never shown.
+- Format dates, numbers, and currency with `Intl`; money arrives as integer minor units + currency.
+
+## Adding things: checklists
+
+**New screen:** create `pages/<name>` (ui + index) -> register lazily in `app/router` -> compose widgets/features/entities; keep the page thin.
+
+**New user action:** create `features/<verb-noun>` with `ui`, `api`/`model`, `index.ts`; import entity types and query keys; invalidate entity queries on success; add tests.
+
+**New business concept:** create `entities/<noun>` with `model` (types, pure helpers), `api` (keys + fetchers), `ui` (display-only components), `index.ts`.
+
+**API changed in backend:** run `{{ api_client_command }}`, fix compile errors, commit the regenerated schema.
+
+## Anti-patterns (reject in review)
+
+- Importing from a higher layer, or between slices of the same layer
+- Deep imports bypassing `index.ts`
+- `shared/` containing business logic, or entity-specific components
+- `utils/`, `helpers/`, `types/`, `components/` catch-all folders
+- Slice with no clear domain meaning (`common`, `misc`, `base`)
+- Hand-written API types; direct http calls from `ui` components
+- Business decisions enforced only in the UI
+- Everything turned into a feature (over-slicing) or everything left in pages (under-slicing)
+
+## Testing
+
+See [testing.md](../engineering/testing.md). Test behavior through the UI as a user would; colocate tests with their slice; test a slice through its public API where practical.

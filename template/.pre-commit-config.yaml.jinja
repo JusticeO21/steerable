@@ -1,0 +1,74 @@
+# Runs on every commit. CI runs the same hooks, because a hook can be skipped
+# locally with --no-verify.
+#
+#   uv run pre-commit install          install the hook (the setup command does this)
+#   uv run pre-commit run --all-files  run everything now
+#
+# Versions are pinned. Update with `uv run pre-commit autoupdate`.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.2
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  # mypy runs in a local hook, not mirrors-mypy: pre-commit's isolated
+  # environment has no third-party stubs, so production imports would be
+  # reported as Any. The project environment has them.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy --strict (project environment)
+        # Whole-project check: pre-commit passes the changed filenames, which
+        # would check only the files in the diff.
+        entry: uv run --frozen mypy --strict src/backend
+        language: system
+        pass_filenames: false
+        files: \.py$
+
+  # Structural rules from docs/architecture/backend.md. Local, because the
+  # script ships with the repository and has no dependencies of its own.
+  - repo: local
+    hooks:
+      - id: boundary-check
+        name: layer and module boundaries
+        entry: node docs/architecture/backend.verify.mjs
+        language: system
+        pass_filenames: false
+        files: ^src/.*\.py$
+
+      - id: adr-drift
+        name: architecture decision records
+        entry: node docs/architecture/decisions/verify.mjs
+        language: system
+        pass_filenames: false
+        files: ^docs/architecture/decisions/.*\.md$
+
+  # The frontend's structure rules, same script `pnpm lint:fsd` runs.
+  - repo: local
+    hooks:
+      - id: frontend-check
+        name: frontend FSD layers, slices, public API
+        entry: node docs/architecture/frontend.verify.mjs
+        language: system
+        pass_filenames: false
+        files: ^src/frontend/.*\.(ts|tsx)$
+
+      - id: frontend-lint
+        name: eslint (staged frontend files)
+        entry: pnpm exec eslint --max-warnings=0
+        language: system
+        files: ^src/frontend/.*\.(ts|tsx)$

@@ -1,0 +1,63 @@
+# ADR-NNN: <TITLE>
+
+- **Status:** `Proposed` | `Accepted` | `Implemented` | `Superseded by ADR-NNN` | `Deprecated`
+- **Date:** YYYY-MM-DD
+- **Deciders:** <NAMES_OR_ROLES>
+- **Supersedes:** none | ADR-NNN
+- **Implemented in:** PATH <!-- required before Status can be Implemented; comma-separated -->
+- **Verified by:** COMMAND <!-- comma-separated; each must name a package.json script or Makefile target -->
+- **Red test:** PATH or `UNTESTED: <reason>` <!-- the test that fails when this decision is violated; see testing.md -->
+
+<!--
+Status meanings:
+  Proposed    — written, not yet agreed.
+  Accepted    — agreed, not yet built. Surviving follow-ups are unbuilt work.
+  Implemented — agreed AND the code exists at every path in "Implemented in",
+                with the check in "Verified by" green in CI.
+  Superseded  — replaced by a later ADR. Do not edit; flip status and keep it.
+  Deprecated  — no longer relevant, not replaced.
+
+Move the status forward only when a person can verify it by opening the paths
+and running the check. Never set Implemented from intent.
+-->
+
+## Context
+
+<PROBLEM_AND_CONSTRAINTS>
+
+Drivers: <DRIVERS, e.g. security, time to market, team size, operability>.
+
+## Options considered
+
+1. **<OPTION_1>.** <TRADEOFF>
+2. **<OPTION_2>.** <TRADEOFF>
+3. **<OPTION_3>.** <TRADEOFF>
+
+## Decision
+
+Use **<CHOSEN_OPTION>**.
+
+- <CONSEQUENCE_OF_THE_DECISION_AS_A_RULE>
+- <HOW_IT_IS_ENFORCED, if a tool enforces it>
+
+## Consequences
+
+**Positive**
+
+- <BENEFIT>
+
+**Negative / costs**
+
+- <COST>
+
+## Rejected alternatives
+
+- *<OPTION>*: <WHY_IT_LOST>
+
+## Follow-ups
+
+- [ ] <OUTSTANDING_WORK> — while this is open, the ADR is at most `Accepted`.
+
+## Revisit when
+
+<CONDITION_THAT_REOPENS_THIS_DECISION>

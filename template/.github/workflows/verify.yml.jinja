@@ -1,0 +1,106 @@
+name: verify
+
+# The same gates `{{ check_command }}` runs. A gate that exists only here is
+# found after a push; a gate that exists only in a hook can be skipped with
+# --no-verify. Both run every one of them.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: verify-{% raw %}${{ github.ref }}{% endraw %}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:{% if backend %}
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '{{ python_version }}'
+          enable-cache: true
+
+      - run: uv sync --locked --all-groups
+
+      - name: format
+        run: uv run ruff format --check .
+
+      - name: lint
+        run: uv run ruff check .
+
+      - name: types (strict)
+        run: uv run mypy --strict {{ backend_root }}
+
+      - name: tests
+        run: uv run pytest
+
+      - name: boundary-check (docs/architecture/backend.verify.mjs)
+        run: node docs/architecture/backend.verify.mjs
+{%- endif %}
+
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: adr-drift (docs/architecture/decisions verify)
+        run: node docs/architecture/decisions/verify.mjs
+{%- if frontend %}
+
+      # Also checks that frontend.md documents the layer order the linter enforces.
+      - name: docs-drift (frontend.verify.mjs)
+        run: node docs/architecture/frontend.verify.mjs
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # No lockfile at generation time: a template pins nothing it has not run.
+      # Commit pnpm-lock.yaml on first install, then switch this to
+      # `pnpm install --frozen-lockfile` so CI proves the lockfile is current.
+      - run: pnpm install --no-frozen-lockfile
+
+      - name: format (prettier --check)
+        run: pnpm run format:check
+
+      - name: lint (eslint)
+        run: pnpm run lint
+
+      - name: FSD (frontend.verify.mjs + eslint boundaries)
+        run: pnpm run lint:fsd
+
+      - name: types (tsc --noEmit)
+        run: pnpm run typecheck
+
+      - name: tests (vitest)
+        run: pnpm test
+{%- if e2e_gate %}
+
+      - name: e2e (playwright)
+        run: |
+          pnpm exec playwright install --with-deps chromium
+          pnpm run test:e2e
+{%- endif %}
+{%- endif %}

@@ -1,0 +1,371 @@
+_min_copier_version: "9.4.0"
+_subdirectory: template
+_templates_suffix: .jinja
+_message_before_copy: |
+  This template generates a repository whose AGENTS.md and docs/ hold the same
+  rules for every project. The first two questions decide which rules exist.
+_message_after_copy: |
+  Created {{ project_name }} ({{ project_type }}).
+
+  Start here, in this order:
+    1. docs/architecture/overview.md  - the architecture the docs describe
+    2. docs/product/business-rules.md - rule IDs every test references
+    3. AGENTS.md                      - the rules every agent must follow
+
+  Then read "START HERE" in AGENTS.md and complete the first-run steps.
+
+# The scope decision. Everything scoped converges on these three booleans,
+# so no template block has to switch on a string.
+backend:
+  type: bool
+  help: Does this repository contain a backend (API, database, workers)?
+  default: true
+
+frontend:
+  type: bool
+  help: Does this repository contain a web frontend?
+  default: true
+
+project_type:
+  type: str
+  help: Scope of the repository
+  when: "false"
+  choices:
+    Full stack: full-stack
+    Frontend only: frontend-only
+    Backend only: backend-only
+  default: >-
+    {%- if backend and frontend -%}
+    full-stack
+    {%- elif frontend -%}
+    frontend-only
+    {%- elif backend -%}
+    backend-only
+    {%- else -%}
+    {{ UNSET }}
+    {%- endif -%}
+  validator: >-
+    {% if not (backend or frontend) %}
+    A repository must contain a backend, a frontend, or both.
+    {% endif %}
+
+# Every question below is asked by an AI agent (or you) while filling AGENTS.md
+# and the docs, not by copier. Defaults keep `copier copy --defaults` working;
+# runtime-source rules (paths, repo layout, CI gates) have no default, because
+# they must come from the project that exists. Do not fill them by guessing.
+
+project_name:
+  type: str
+  help: Repository name
+  default: "{{ _copier_conf.dst_path.name }}"
+
+product_summary:
+  type: str
+  multiline: true
+  help: >-
+    What does the product do, who uses it, and what is the one thing it must get
+    right? Written next to a README's first paragraph.
+  default: >-
+    TODO: replace with 2-3 sentences. Name the user, the job the product does,
+    and the single invariant that must never break.
+
+business_rules_source:
+  type: str
+  help: >-
+    How business rules get their IDs - human-maintained, a ticket system, or
+    domain experts. Rule IDs are cited by tests and mirrored UI rules.
+  default: >-
+    TODO: name the source of truth for business rules and how a rule is
+    numbered (for example: product owner keeps BR-<AREA>-<NN> in the tracker).
+
+frontend_language:
+  type: str
+  help: Language of the frontend (shown in AGENTS.md conventions)
+  default: TypeScript
+  when: "{{ frontend }}"
+
+package_manager:
+  type: str
+  choices:
+    - pnpm
+    - npm
+    - yarn
+    - bun
+  default: pnpm
+  when: "{{ frontend }}"
+
+ui_stack:
+  type: str
+  choices:
+    - React Router (Vite SPA)
+    - Next.js App Router
+    - React Router (framework mode)
+  default: React Router (Vite SPA)
+  when: "{{ frontend }}"
+
+design_system:
+  type: str
+  help: Component and styling foundation used for shared/ui
+  default: Radix primitives + Tailwind CSS
+  when: "{{ frontend }}"
+
+api_client_command:
+  type: str
+  help: Command that regenerates types from the OpenAPI schema
+  default: "{{ package_manager }} gen:api"
+  when: "{{ frontend }}"
+
+openapi_schema:
+  type: str
+  help: >-
+    Where openapi-typescript reads the schema from. A local file is checked by
+    the build; a URL is fetched, so CI needs network.
+  when: "{{ frontend }}"
+  default: >-
+    {%- if backend -%}
+    ./openapi.json
+    {%- else -%}
+    https://api.example.com/openapi.json
+    {%- endif %}
+
+api_types_owner:
+  type: str
+  choices:
+    This repository serves the schema: served-by-this-repo
+    A separate service serves the schema: remote-schema
+  default: >-
+    {%- if backend -%}
+    served-by-this-repo
+    {%- else -%}
+    remote-schema
+    {%- endif %}
+  when: "{{ frontend }}"
+
+backend_linter:
+  type: str
+  help: Linter + formatter for the backend
+  default: ruff
+  when: "{{ backend }}"
+
+python_version:
+  type: str
+  help: Python version the backend targets (uv writes it to .python-version)
+  default: "3.12"
+  when: "{{ backend }}"
+
+backend_stack:
+  type: str
+  help: One-line backend stack, used in docs/architecture/overview.md
+  when: "{{ backend }}"
+  default: >-
+    Python, FastAPI, Pydantic, SQLAlchemy 2.0 (async)
+
+worker_stack:
+  type: str
+  help: One-line worker stack, used in docs/architecture/overview.md
+  when: "{{ backend }}"
+  default: >-
+    Celery, same codebase, separate process
+
+db_conventions:
+  type: str
+  choices:
+    "snake_case tables, UUIDv7 ids": snake-case-uuidv7
+    "snake_case tables, serial/bigint ids": snake-case-serial
+    "camelCase PostgreSQL with quoted identifiers": camel-case
+  default: snake-case-uuidv7
+  when: "{{ backend }}"
+
+backend_root:
+  type: str
+  help: Backend source root (relative)
+  default: src/backend
+  when: "{{ backend }}"
+
+frontend_root:
+  type: str
+  help: Frontend source root (relative)
+  default: src/frontend
+  when: "{{ frontend }}"
+
+migrations_root:
+  type: str
+  help: Migrations directory (relative)
+  default: "{{ backend_root }}/migrations"
+  when: "{{ backend }}"
+
+setup_command:
+  type: str
+  help: One-time setup command
+  # The frontend half installs dependencies, makes the pre-commit hook
+  # executable (templates copied on Windows lose the mode, and git refuses to
+  # run a non-executable hook), then runs husky's installer.
+  default: >-
+    {%- if frontend -%}
+    {{ package_manager }} install && chmod +x .husky/pre-commit && node -e "require('husky')"
+    {%- endif -%}
+    {%- if frontend and backend -%}
+    ; {% endif -%}
+    {%- if backend -%}
+    uv sync --all-groups && uv run pre-commit install
+    {%- endif %}
+
+dev_command:
+  type: str
+  help: Command that starts the local dev environment
+  default: >-
+    {%- if frontend -%}
+    {{ package_manager }} dev
+    {%- endif -%}
+    {%- if frontend and backend -%}
+    ; {% endif -%}
+    {%- if backend -%}
+    uv run uvicorn {{ backend_root.replace('/', '.') | replace('src.', '') }}.app.main:app --reload
+    {%- endif %}
+
+check_command:
+  type: str
+  help: Command that runs every CI gate
+  # uv spawns a bare `python` from the environment even on Windows, where
+  # scripts without an extension (make, node) are not found that way.
+  default: >-
+    {%- if backend -%}
+    uv run python -m tools.check
+    {%- else -%}
+    {{ package_manager }} run check
+    {%- endif %}
+
+frontend_unit_command:
+  type: str
+  help: Command that runs frontend unit/component tests
+  when: "{{ frontend }}"
+  default: "{{ package_manager }} test"
+  ask: false
+
+frontend_typecheck_command:
+  type: str
+  help: Command that type-checks the frontend
+  when: "{{ frontend }}"
+  default: "{{ package_manager }} typecheck"
+  ask: false
+
+frontend_lint_command:
+  type: str
+  help: Command that lints the frontend (ESLint)
+  when: "{{ frontend }}"
+  default: "{{ package_manager }} lint"
+  ask: false
+
+fsd_lint_command:
+  type: str
+  help: Command that enforces Feature-Sliced Design boundaries
+  when: "{{ frontend }}"
+  default: "{{ package_manager }} lint:fsd"
+  ask: false
+
+e2e_gate:
+  type: bool
+  help: >-
+    Does this repository run Playwright e2e in CI now? It needs a browser
+    download and a dev server; turn it on once the first journey exists.
+  when: "{{ frontend }}"
+  default: false
+
+e2e_command:
+  type: str
+  help: Command that runs end-to-end tests
+  when: "{{ frontend }}"
+  default: "{{ package_manager }} test:e2e"
+  ask: false
+
+backend_lint_command:
+  type: str
+  help: Command that lints the backend
+  when: "{{ backend }}"
+  default: >-
+    uv run ruff check && uv run ruff format --check
+  ask: false
+
+backend_types_command:
+  type: str
+  help: Command that type-checks the backend
+  when: "{{ backend }}"
+  default: >-
+    uv run mypy --strict {{ backend_root }}
+  ask: false
+
+backend_test_command:
+  type: str
+  help: Command that runs backend tests
+  when: "{{ backend }}"
+  default: >-
+    uv run pytest
+  ask: false
+
+migrate_command:
+  type: str
+  help: Command that applies migrations
+  when: "{{ backend }}"
+  default: >-
+    uv run alembic upgrade head
+  ask: false
+
+api_curl_command:
+  type: str
+  help: 'Command that calls the API over HTTP, e.g. curl http://localhost:8000/api/v1/orders'
+  when: "{{ backend }}"
+  default: curl http://localhost:8000/api/v1/orders
+
+dev_server_probe:
+  type: str
+  help: 'Command that proves the dev server answers, e.g. curl -f http://localhost:5173/'
+  default: >-
+    {%- if project_type == 'full-stack' -%}
+    curl -f http://localhost:5173/
+    {%- else -%}
+    {{ api_curl_command }}
+    {%- endif %}
+  ask: false
+
+repo_layout:
+  type: str
+  help: List subdirectories that own source or configuration, e.g. packages/shared
+  default: ""
+
+tiering_hook:
+  type: str
+  help: >-
+    How does an agent learn which rule applies to a file it is about to edit
+    (a table, a mapping file, or the convention "read the matching doc first")?
+  default: >-
+    docs/architecture/path-rules.md has a "Which rules apply to this path" table.
+    Read it before editing any path listed there.
+
+ci_gates:
+  type: str
+  multiline: true
+  ask: false
+  help: Ordered list of gates that CI runs, one per line
+  default: |
+    {% if backend -%}
+    backend lint
+    backend types (strict)
+    backend tests
+    {% endif -%}
+    {% if frontend -%}
+    frontend format (prettier --check)
+    frontend lint (eslint)
+    frontend FSD (frontend.verify.mjs + eslint boundaries)
+    frontend types (tsc --noEmit)
+    frontend tests (vitest)
+    {% endif -%}
+    {% if frontend and e2e_gate -%}
+    e2e (playwright)
+    {% endif -%}
+    {% if backend -%}
+    boundary-check (docs/architecture/backend.verify.mjs)
+    {% endif -%}
+    adr-drift (docs/architecture/decisions verify)
+    {% if frontend -%}
+    docs-drift (frontend.verify.mjs checks frontend.md layer order)
+    {% endif %}

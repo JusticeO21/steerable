@@ -1,0 +1,120 @@
+# Business Rules
+
+**This is the single source of truth for product behavior.** Code implements these rules; it does not define them. If code and this document disagree, one of them is a bug. Resolve with the product owner, then fix and update both.
+
+> **Template notice:** the entities and rules below are an illustrative example (a subscription/ordering SaaS). Replace them with the real domain. Keep the format.
+
+- **Owner:** Product (name)
+- **Last reviewed:** YYYY-MM-DD
+
+## How to use this document
+
+- Each rule has a stable ID (`BR-<AREA>-<NN>`). IDs are never reused; retired rules are marked **Deprecated**, not deleted.
+- Reference rule IDs in code comments, test names, and PR descriptions (e.g. `def test_br_ord_04_rejects_refund_after_30_days()`).
+- Every rule must be testable and unambiguous. Use MUST / MUST NOT / SHOULD in the RFC 2119 sense.
+- Changes to rules go through product approval and are noted in the changelog at the bottom.
+
+## Glossary
+
+| Term | Definition |
+|---|---|
+| Tenant | A customer organization; owns all of its data |
+| User | A person who belongs to one or more tenants with a role |
+| Plan | A subscription tier defining limits and price |
+| Order | A purchase request containing line items |
+| Minor units | Smallest currency unit (cents) used for all money |
+
+## Roles and permissions
+
+| Action | Owner | Admin | Member | Viewer |
+|---|---|---|---|---|
+| View orders | Y | Y | Y | Y |
+| Create orders | Y | Y | Y | N |
+| Cancel orders | Y | Y | Own only | N |
+| Issue refunds | Y | Y | N | N |
+| Manage users | Y | Y | N | N |
+| Manage billing/plan | Y | N | N | N |
+| Delete tenant | Y | N | N | N |
+
+- **BR-AUTH-01:** A tenant MUST always have at least one Owner. The last Owner cannot be removed or demoted.
+- **BR-AUTH-02:** Users MUST only ever see data belonging to tenants they are members of.
+
+## Accounts and tenants
+
+- **BR-ACC-01:** Tenant slug MUST be unique, 3-40 chars, lowercase letters/digits/hyphens.
+- **BR-ACC-02:** A user email MUST be unique across the platform (case-insensitive).
+- **BR-ACC-03:** Deleting a tenant is a soft delete with a 30-day recovery window, after which data is permanently purged.
+- **BR-ACC-04:** Invitations expire after 7 days and are single use.
+
+## Plans and limits
+
+| Plan | Seats | Orders / month | API rate (req/min) |
+|---|---|---|---|
+| Free | 3 | 50 | 60 |
+| Pro | 25 | 5,000 | 600 |
+| Enterprise | Custom | Custom | Custom |
+
+- **BR-PLAN-01:** Exceeding the seat limit MUST block new invitations, not remove existing users.
+- **BR-PLAN-02:** Exceeding the monthly order limit on Free MUST block new orders with `PLAN_LIMIT_EXCEEDED`; Pro MAY exceed and be billed overage.
+- **BR-PLAN-03:** Downgrades take effect at the end of the billing period. Downgrade MUST be blocked if current usage exceeds the target plan's seat limit.
+
+## Orders
+
+State machine:
+
+```
+draft -> submitted -> paid -> fulfilled -> (closed)
+   \         \          \
+    \         \          -> refunded
+     -> cancelled <------
+```
+
+| From | To | Allowed when |
+|---|---|---|
+| draft | submitted | At least one line item |
+| submitted | paid | Payment confirmed by provider |
+| submitted | cancelled | Anyone with cancel permission |
+| paid | fulfilled | All items delivered |
+| paid | refunded | Within refund window (BR-ORD-04) |
+| paid | cancelled | NOT allowed; use refund |
+
+- **BR-ORD-01:** An order MUST have 1-100 line items; quantity per item MUST be an integer 1-999.
+- **BR-ORD-02:** Order total = sum(unit price x quantity) - discounts + tax, computed server-side in minor units. Client-supplied totals MUST be ignored.
+- **BR-ORD-03:** Invalid state transitions MUST be rejected with 409 `INVALID_STATE_TRANSITION`.
+- **BR-ORD-04:** Refunds are allowed within 30 days of payment. Partial refunds MUST NOT exceed the paid amount minus prior refunds.
+- **BR-ORD-05:** Prices are snapshotted on the order at submission; later catalog price changes MUST NOT affect existing orders.
+- **BR-ORD-06:** Order creation MUST be idempotent per `Idempotency-Key` (24 h).
+
+## Money, tax, and currency
+
+- **BR-MON-01:** All amounts are integers in minor units with an ISO 4217 currency code. Floating point MUST NOT be used.
+- **BR-MON-02:** An order has exactly one currency; mixing currencies is rejected.
+- **BR-MON-03:** Rounding: tax is computed per line, rounded half-up to the minor unit.
+
+## Notifications
+
+- **BR-NOT-01:** Transactional emails (receipt, invitation, password reset) MUST be sent regardless of marketing preference.
+- **BR-NOT-02:** Marketing emails require explicit opt-in and MUST include unsubscribe; unsubscribes apply within 24 h.
+
+## Data retention and privacy
+
+- **BR-DATA-01:** Audit logs retained 1 year minimum; financial records 7 years.
+- **BR-DATA-02:** A verified user deletion request MUST anonymize personal data within 30 days, retaining financial records without PII where legally required.
+- **BR-DATA-03:** Users can export their personal data on request.
+
+## Edge cases and decisions log
+
+| Date | Question | Decision | Rule |
+|---|---|---|---|
+| YYYY-MM-DD | What if payment confirms after the order was cancelled? | Auto-refund and notify | BR-ORD-07 (pending) |
+
+## Open questions
+
+- [ ] Tax handling for cross-border B2B (reverse charge)?
+- [ ] Grace period when payment fails on renewal?
+
+## Changelog
+
+| Date | Rule(s) | Change | Approved by |
+|---|---|---|---|
+| YYYY-MM-DD | All | Initial version | Product |

@@ -1,0 +1,183 @@
+# Security Architecture
+
+Security is a feature of every change, not a phase. This document defines the
+properties the system must have. It does not name the technologies chosen to
+provide them, because those are decisions recorded in
+[decisions/](decisions/README.md) once someone has made them.
+
+Read it as a checklist of obligations. "Must" is non-negotiable without an ADR
+and a security review. Where a rule needs a concrete value before it can be
+applied (a timeout, a length limit), the value comes from the ADR that made the
+choice; until that ADR exists, pick none and treat the rule as open.
+
+## How to prioritize
+
+When time is short, prioritize by blast radius, not by likelihood:
+
+1. **Anything that crosses a tenant or user boundary.** A leak here is
+   unrecoverable; the data is out and cannot be recalled.
+2. **Anything that grants access.** Authentication and authorization flaws turn
+   one bug into a full compromise.
+3. **Anything that handles a secret or a credential.** Leaked secrets are
+   rotation work at best and an incident at worst.
+4. **Everything else.** Input validation, error detail, headers, logging.
+
+A feature that touches 1-3 is not done until the matching sections below are
+satisfied. A feature that touches only 4 follows the rules where they apply and
+does not need a security review.
+
+## Threat model summary (STRIDE-oriented)
+
+| Threat | Requirement |
+|---|---|
+| Spoofing | Every request is authenticated or explicitly public; nothing trusts a client-supplied identity |
+| Tampering | All input validated at the boundary; all writes constrained by the database, not only by app code |
+| Repudiation | Security-relevant actions are recorded in an append-only audit log with a correlation ID |
+| Information disclosure | Tenant isolation enforced server-side on every read and write; foreign resources are indistinguishable from missing ones |
+| Denial of service | Unbounded work is capped: pagination, payload size, timeouts, queue depth |
+| Elevation of privilege | Authz is deny-by-default and checked on the server; client-side checks are never the check |
+
+Review the threat model when adding a new trust boundary: a new integration, a
+new user type, a new class of data.
+
+## Authentication
+
+Owned by the API repository{% if backend %}{% else %} this client calls{% endif %}.
+Record the choice in an ADR before implementing it; the requirements it must
+meet:
+
+- Session or token identifiers are unguessable random values of at least 256
+  bits, and are revocable server-side without waiting for expiry.
+- Credentials and tokens are never reachable from JavaScript running in the
+  browser. A token in `localStorage` or `sessionStorage` is a defect, not a
+  style choice.
+- Sessions have both an idle timeout and an absolute lifetime, and are rotated
+  when privilege changes.
+- MFA is available to all users and required for privileged roles.
+- Passwords, if stored at all, are never stored by application code; delegate to
+  an identity provider or a reviewed hashing library.
+- Authentication failures do not reveal whether an account exists, in body,
+  status code, or response time.
+
+## Authorization
+
+- **Deny by default.** A route without an explicit permission or an explicit
+  `public` marker fails CI.
+- Authorization is evaluated **server-side, in the service layer**. Hiding a
+  button is not a check.
+- Every read and write is scoped to the caller's tenant. Loading a resource by
+  ID alone is forbidden; the query includes the tenant filter.
+- Never trust an ID from the client. Access is verified against the caller, not
+  inferred from the fact that they know the ID.
+- The role and permission model is recorded in an ADR. Adding a role or a
+  permission is an ADR-worthy change when it changes what a class of user can
+  reach.
+- Privileged actions (admin, impersonation) are explicit, time-boxed, and
+  audited.
+
+## Input and output handling
+
+- Validate every input at the boundary: type, length, format, range. Reject
+  unknown fields rather than ignoring them.
+- Queries are parameterized. String-built SQL is a defect regardless of
+  provenance of the input.
+- Responses are built from an explicit output schema so internal fields are
+  never serialized by accident.
+- React escaping is the default; raw HTML injection requires a justification in
+  the PR.
+- Uploads: size limit, allow-listed content types, stored outside the web root
+  under random names, served with `Content-Disposition`.
+- Outbound requests to user-supplied URLs go through an allow-list that blocks
+  private ranges and metadata endpoints.
+- Mass assignment is prevented by mapping input to explicit fields; privileged
+  columns (`tenant_id`, `role`, `is_admin`) are never set from a request body.
+
+## Web security headers and CSRF
+
+- `Content-Security-Policy` without `unsafe-inline`, `Strict-Transport-Security`,
+  `X-Content-Type-Options: nosniff`, `Referrer-Policy:
+  strict-origin-when-cross-origin`, minimal `Permissions-Policy`,
+  `frame-ancestors 'none'`.
+- State-changing requests are protected by cookie attributes plus a custom
+  header, and `Origin` is verified.
+- CORS is an explicit allow-list. Never `*` with credentials.
+
+## Secrets management
+
+- Secrets come from the environment or a secret manager at runtime. Never in
+  git, images, logs, error messages, or client bundles.
+- Secret scanning runs pre-commit and in CI. A leaked secret is rotated
+  immediately; deleting the commit is not containment.
+- Each environment and each service has its own credentials. The application
+  role cannot alter schema; migrations use a separate role.
+
+## Data protection
+
+| Class | Examples | Requirement |
+|---|---|---|
+| Public | Marketing content | None |
+| Internal | Metrics, configs | Authenticated access |
+| Confidential | Customer business data | Tenant-scoped, encrypted at rest, access logged |
+| Restricted | Credentials, payment tokens, government IDs | Never logged, minimal retention, encrypted at the field level |
+
+- TLS 1.2+ on every hop, including internal traffic.
+- Encryption at rest for database, backups, object storage, and queues.
+- Card data is never stored; use the payment provider's tokens.
+- Logs and error tracking exclude PII by default; scrub before sending.
+
+## Rate limiting and abuse prevention
+
+- Global and per-identity limits at the edge; stricter ones on login, password
+  reset, and signup.
+- Expensive endpoints are capped and authenticated.
+- Public forms have bot protection.
+- Login and reset responses are uniform in shape and timing.
+
+## Dependency and supply chain security
+
+- Lockfiles are committed; CI installs from them frozen.
+- Automated dependency updates are enabled, and audits run in CI. Critical
+  vulnerabilities are fixed within 7 days, high within 30.
+- New dependencies are reviewed for maintenance, activity, install scripts, and
+  license before being added.
+- Base images are pinned by digest; containers run as non-root.
+- CI tokens are least-privilege; branches that run CI are protected.
+
+## Logging, auditing, and detection
+
+- The audit log is append-only and records authentication events, permission
+  changes, data exports, admin actions, and deletions.
+- Alerts fire on repeated authentication failures, privilege escalation,
+  unusual export volume, and cross-tenant access attempts.
+- Logs never contain secrets, tokens, passwords, or full PII.
+
+## Incident response
+
+1. **Detect and triage** (SEV1-SEV4).
+2. **Contain**: revoke sessions and keys, disable the feature, block traffic.
+3. **Eradicate and recover.**
+4. **Notify** affected parties and regulators within legal deadlines.
+5. **Blameless postmortem** with tracked action items.
+
+{%- if backend %}
+Maintain a runbook per critical alert.
+{%- endif %}
+
+## Secure development lifecycle
+
+- Security checklist in the PR template ([code-review.md](../engineering/code-review.md)).
+- SAST and secret scanning run on every PR.
+- Security tests cover the authz matrix and tenant isolation, not only the happy
+  path.
+- Penetration test at least annually; access review quarterly.
+
+## Responsible disclosure
+
+Publish `security.txt` with a contact, and acknowledge reports within 2 business
+days.
+
+## Compliance notes
+
+Document the regimes that apply (GDPR, SOC 2, HIPAA, PCI) and map controls here
+as they become relevant. Keep a record of processing activities and
+subprocessors.

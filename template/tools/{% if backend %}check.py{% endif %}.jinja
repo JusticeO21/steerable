@@ -1,0 +1,42 @@
+"""Every gate CI runs, in the same order, from one command.
+
+Docs: docs/architecture/backend.md#code-quality-gates. A gate either passes or
+the command exits non-zero. CI and the pre-commit hook run the same tools, so a
+local pass predicts a green build.
+
+    uv run python -m tools.check      # from any shell, including PowerShell
+"""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+BACKEND_ROOT = "{{ backend_root }}"
+
+
+def python(*args: str) -> None:
+    subprocess.run([sys.executable, "-m", *args], cwd=ROOT, check=True)
+
+
+def node(*args: str) -> None:
+    executable = shutil.which("node")
+    if executable is None:
+        sys.exit("node not found on PATH; it runs the boundary and ADR checks")
+    subprocess.run([executable, *args], cwd=ROOT, check=True)
+
+
+def main() -> None:
+    python("ruff", "format", "--check", ".")
+    python("ruff", "check", ".")
+    python("mypy", "--strict", BACKEND_ROOT)
+    python("pytest")
+    node("docs/architecture/backend.verify.mjs")
+    node("docs/architecture/decisions/verify.mjs")
+
+
+if __name__ == "__main__":
+    main()

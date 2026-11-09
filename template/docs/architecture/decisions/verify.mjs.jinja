@@ -1,0 +1,107 @@
+#!/usr/bin/env node
+// Fails when an ADR claims more than the repository delivers.
+// Run from the repository root: node docs/architecture/decisions/verify.mjs
+import { readFileSync, existsSync, readdirSync } from 'node:fs'
+import { join, dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const here = dirname(fileURLToPath(import.meta.url))
+const root = resolve(here, '../../..')
+
+const errors = []
+const fail = (file, message) => errors.push(`${file}: ${message}`)
+
+const packageJson = existsSync(join(root, 'package.json'))
+  ? JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+  : { scripts: {} }
+const scripts = packageJson.scripts || {}
+const makefile = existsSync(join(root, 'Makefile'))
+  ? readFileSync(join(root, 'Makefile'), 'utf8')
+  : ''
+
+// "Verified by" lists commands, separated by semicolons. A command exists in
+// this repository when one of its first two words is a package.json script or a
+// Makefile target, or when it runs a checked-in script (node path/to/file).
+function commandExists(command) {
+  const words = command.trim().split(/\s+/)
+  if (words[0] === 'node' && words[1] && existsSync(join(root, words[1].replace(/^\.\//, '')))) {
+    return true
+  }
+  const head = words.slice(0, 2)
+  return head.some((word, index) => {
+    const next = head[index + 1]
+    // A package manager's script runner (`pnpm test`, `bun run lint`) counts
+    // only when the script it names exists. The manager itself does not.
+    if (['pnpm', 'npm', 'yarn', 'bun'].includes(word) && next) {
+      return Boolean(scripts[next === 'run' ? head[index + 2] : next])
+    }
+    if (scripts[word]) return true
+    if (word === 'make' && next)
+      return new RegExp(`^${next.replace('.', '\\.')}:`, 'm').test(makefile)
+    return false
+  })
+}
+
+function field(text, name) {
+  const match = text.match(new RegExp(`^[-*]\\s*\\*\\*${name}:\\*\\*\\s*(.+)$`, 'm'))
+  return match ? match[1].trim() : null
+}
+
+function listOf(value) {
+  return (value || '')
+    .split(/[,;\n]/)
+    .map((item) => item.replace(/`/g, '').trim())
+    .filter((item) => item && item !== '—' && item !== '-' && item !== 'none')
+}
+
+const files = readdirSync(here).filter((f) => /^\d{3}-.*\.md$/.test(f) && !f.startsWith('000-'))
+if (files.length === 0) {
+  console.log('adr-drift: no decisions recorded yet; nothing to verify')
+  process.exit(0)
+}
+
+for (const file of files) {
+  const text = readFileSync(join(here, file), 'utf8')
+  const status = field(text, 'Status')
+  if (!status) {
+    fail(file, 'missing Status line')
+    continue
+  }
+  const base = /^Superseded by ADR-\d+$/.test(status) ? 'Superseded' : status
+  if (!['Proposed', 'Accepted', 'Implemented', 'Superseded', 'Deprecated'].includes(base)) {
+    fail(file, `unknown status "${status}"`)
+    continue
+  }
+
+  const paths = listOf(field(text, 'Implemented in'))
+  const commands = listOf(field(text, 'Verified by'))
+
+  if (base === 'Implemented') {
+    if (paths.length === 0) fail(file, 'Implemented but "Implemented in" is empty')
+    for (const path of paths) {
+      if (!existsSync(join(root, path)))
+        fail(file, `Implemented in "${path}" but it does not exist`)
+    }
+    if (commands.length === 0) fail(file, 'Implemented but "Verified by" is empty')
+    for (const command of commands) {
+      if (!commandExists(command))
+        fail(file, `Verified by "${command}" matches no script or Makefile target`)
+    }
+  } else {
+    for (const path of paths) {
+      if (existsSync(join(root, path))) {
+        fail(
+          file,
+          `status is ${status} but "${path}" exists; promote the status or remove the path`,
+        )
+      }
+    }
+  }
+}
+
+if (errors.length) {
+  console.error(`adr-drift: ${errors.length} problem(s)`)
+  for (const error of errors) console.error(`  ${error}`)
+  process.exit(1)
+}
+console.log(`adr-drift: ${files.length} ADR(s) consistent with the repository`)

@@ -1,0 +1,198 @@
+// Rules from docs/architecture/frontend.md, enforced here.
+//
+//   pnpm lint          this file alone
+//   pnpm lint:fsd      the FSD layer patterns in frontend.md and this file must
+//                      agree (docs/architecture/frontend.verify.mjs), then lint
+//
+// A rule that fires is a defect in the code. Fix the code; do not lower a
+// threshold or disable a rule to make the build pass.
+import js from '@eslint/js'
+import boundaries from 'eslint-plugin-boundaries'
+import { createTypeScriptImportResolver } from 'eslint-import-resolver-typescript'
+import importPlugin from 'eslint-plugin-import'
+import jsxA11y from 'eslint-plugin-jsx-a11y'
+import react from 'eslint-plugin-react'
+import reactHooks from 'eslint-plugin-react-hooks'
+import globals from 'globals'
+import tseslint from 'typescript-eslint'
+
+const MAX_LINES_WARN = 400
+const MAX_LINES_ERROR = 600
+
+// FSD layers, most dependent first. This list must match the import-rule line
+// in docs/architecture/frontend.md; lint:fsd fails when they disagree.
+const FSD_LAYERS = ['app', 'pages', 'widgets', 'features', 'entities', 'shared']
+
+const tsResolver = { typescript: createTypeScriptImportResolver() }
+
+// Each type names its src/ directory files before (and above) the slice
+// pattern. boundaries matches top-down and a file's first match wins, so
+// src/features/cancel-order/index.ts must fall under "features" rather than
+// being taken for a slice named "index.ts".
+const layerElements = FSD_LAYERS.flatMap((layer) => {
+  const dir = { type: `${layer}-dir`, pattern: `{{ frontend_root }}/src/${layer}/*.*` }
+  if (layer === 'app' || layer === 'shared') {
+    return [dir, { type: layer, pattern: `{{ frontend_root }}/src/${layer}/**` }]
+  }
+  // No trailing /** on slices: a slice's own index.ts is its public API and
+  // must be governed by the same policies as its internals.
+  return [dir, { type: layer, pattern: `{{ frontend_root }}/src/${layer}/*`, capture: ['slice'] }]
+})
+
+const allowedBelow = (index) =>
+  FSD_LAYERS.slice(index + 1).map((type) => ({ to: { element: { type } } }))
+
+const policies = FSD_LAYERS.map((type, index) => ({
+  from: { element: { type } },
+  allow: allowedBelow(index),
+}))
+
+// The only same-layer edge FSD allows: one entity reading another's @x barrel.
+// fileInternalPath is the target file's path inside its slice, so this permits
+// @/entities/user/@x/order and still rejects @/entities/user/model/types.
+policies.push({
+  from: { element: { type: 'entities' } },
+  allow: [
+    {
+      to: { element: { type: 'entities', fileInternalPath: '**/@x/**' } },
+      message:
+        'Import another entity only through its @x/<importer>.ts barrel: @/entities/<slice>/@x/...',
+    },
+  ],
+})
+
+export default tseslint.config(
+  {
+    ignores: [
+      'node_modules/**',
+      'dist/**',
+      'coverage/**',
+      'playwright-report/**',
+      'test-results/**',
+      '**/*.d.ts',
+    ],
+  },
+
+  js.configs.recommended,
+  ...tseslint.configs.strictTypeChecked,
+  ...tseslint.configs.stylisticTypeChecked,
+
+  {
+    languageOptions: {
+      parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
+      globals: { ...globals.browser, ...globals.node },
+    },
+  },
+
+  // Config and script files are JS: no type information to check against.
+  {
+    files: ['**/*.{js,mjs,cjs}'],
+    ...tseslint.configs.disableTypeChecked,
+  },
+
+  {
+    files: ['**/*.{ts,tsx}'],
+    plugins: { react, 'react-hooks': reactHooks, 'jsx-a11y': jsxA11y },
+    settings: { react: { version: 'detect' } },
+    rules: {
+      ...react.configs.flat.recommended.rules,
+      ...react.configs.flat['jsx-runtime'].rules,
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'error',
+      'react/prop-types': 'off',
+      ...jsxA11y.flatConfigs.recommended.rules,
+
+      // No default exports except framework route files; no user-visible text
+      // outside a content module.
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'ExportDefaultDeclaration',
+          message:
+            'Default exports are only allowed in framework route files (page, layout, error, loading, not-found, route).',
+        },
+        {
+          selector: 'JSXText[value=/[A-Za-z]{2,}/]',
+          message:
+            'User-visible text must come from a content module (pages/<page>/model/content.ts, <slice>/model/content.ts, or shared/i18n), not a JSX literal.',
+        },
+        {
+          selector:
+            'JSXAttribute[name.name=/^(alt|title|placeholder|aria-label|aria-description|aria-roledescription)$/] > Literal[value=/[A-Za-z]{2,}/]',
+          message:
+            'User-visible attribute text must come from a content module, not a string literal.',
+        },
+      ],
+
+      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/consistent-type-imports': ['error', { prefer: 'type-imports' }],
+      '@typescript-eslint/no-unnecessary-type-assertion': 'error',
+      '@typescript-eslint/ban-ts-comment': [
+        'error',
+        {
+          'ts-expect-error': 'allow-with-description',
+          'ts-ignore': true,
+          'ts-nocheck': true,
+          minimumDescriptionLength: 10,
+        },
+      ],
+      '@typescript-eslint/no-non-null-assertion': 'error',
+      '@typescript-eslint/no-floating-promises': 'error',
+      '@typescript-eslint/switch-exhaustiveness-check': 'error',
+
+      'no-console': ['error', { allow: ['warn', 'error'] }],
+
+      // Warn tier first, error tier last: ESLint applies the last matching
+      // config, so the stronger limit must come second.
+      'max-lines': ['warn', { max: MAX_LINES_WARN, skipBlankLines: true, skipComments: true }],
+    },
+  },
+
+  // Error tier overrides the warn tier.
+  {
+    files: ['**/*.{ts,tsx}'],
+    rules: {
+      'max-lines': ['error', { max: MAX_LINES_ERROR, skipBlankLines: true, skipComments: true }],
+    },
+  },
+
+  // Framework route files: a default export is mandatory there.
+  {
+    files: ['{{ frontend_root }}/src/pages/*/ui/*Page.tsx', '{{ frontend_root }}/src/app/**/*.{ts,tsx}'],
+    rules: { 'no-restricted-syntax': 'off' },
+  },
+
+  {
+    files: ['**/*.config.{js,mjs,ts}', 'eslint.config.mjs'],
+    rules: { 'max-lines': 'off', 'no-restricted-syntax': 'off' },
+  },
+
+  {
+    files: ['**/*.{test,spec}.{ts,tsx}', 'e2e/**/*.ts', '**/*.setup.ts'],
+    rules: { '@typescript-eslint/no-non-null-assertion': 'off' },
+  },
+
+  // Import hygiene: no cycles.
+  {
+    files: ['**/*.{ts,tsx}'],
+    plugins: { import: importPlugin },
+    settings: { 'import/resolver': tsResolver },
+    rules: { 'import/no-cycle': ['error', { maxDepth: 5 }] },
+  },
+
+  // FSD layer direction. The plugin resolves each import to a file before it
+  // can know which layer it targets, so the TS-aware resolver is required;
+  // without it the rule silently passes.
+  {
+    files: ['{{ frontend_root }}/src/**/*.{ts,tsx}'],
+    plugins: { boundaries },
+    settings: {
+      'boundaries/elements': layerElements,
+      'boundaries/ignore': ['**/*.{test,spec}.{ts,tsx}'],
+      'import/resolver': tsResolver,
+    },
+    rules: {
+      'boundaries/dependencies': ['error', { default: 'disallow', policies }],
+    },
+  },
+)

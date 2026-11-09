@@ -1,0 +1,8 @@
+import { HomePage } from '@/pages/home'
+
+// Route table: pages/ is imported here and nowhere else. Add a router
+// (React Router, TanStack Router) as an ADR decision; until then the app has
+// one screen. Pages are lazy-loaded once there is more than one.
+export function Router() {
+  return <HomePage />
+}

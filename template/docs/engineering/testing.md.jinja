@@ -1,0 +1,281 @@
+# Testing Strategy
+
+Tests exist to let us change code fearlessly. We optimize for **confidence per minute of runtime**, not coverage numbers.
+
+## Principles
+
+1. **Test behavior, not implementation.** Assert outcomes through public interfaces; refactors should not break tests.
+2. **Fast feedback.** Unit suites run in seconds; full CI in under ~10 minutes.
+3. **Deterministic.** No flakiness tolerated: no sleeps, no real clocks/randomness/network in unit tests. A flaky test is quarantined within 24 h and fixed or deleted.
+4. **Tests are code.** Same quality bar and review as production code.
+5. **Business rules are tested by rule ID** (e.g. `BR-ORD-04`). Every rule in `business-rules.md` has at least one test.
+
+## The pyramid
+
+| Level | Scope | Tooling | Speed | Share |
+|---|---|---|---|---|
+{%- if backend %}
+| Backend unit | Pure logic, services with fakes | the project's test runner | ms | ~45% |
+| Backend integration | Repositories against a real store, HTTP routes, job handlers | test runner + HTTP client + containerized store | s | ~25% |
+{%- endif %}
+{%- if frontend %}
+| Frontend unit/component | Slice logic and UI behavior | Vitest + Testing Library | ms-s | ~25% |
+{%- endif %}
+| Contract | OpenAPI breaking-change check, generated-types drift check | `oasdiff`, CI diff on `shared/api` | s | always |
+{%- if frontend %}
+| End-to-end | Critical user journeys in a browser | Playwright | tens of s | ~5% |
+{%- endif %}
+
+## Layout
+
+Each suite lives with its own code; there is no shared top-level `tests/`
+directory.
+
+```
+{%- if backend %}
+{{ backend_root }}/
+  app/
+    modules/<module>/      # router, service, repository
+  tests/                   # testpaths in pyproject.toml
+    test_<module>.py       # HTTP + service tests, called through the app
+{%- endif %}
+{%- if frontend %}
+{{ frontend_root }}/src/
+  <layer>/<slice>/         # *.test.ts(x) colocated with the slice's ui/model/api
+e2e/                       # Playwright specs (repository root)
+{%- endif %}
+```
+
+The runner ships with the repository{% if backend and frontend %}: `uv run pytest`
+for the backend, `pnpm test` (Vitest) for the frontend{% elif frontend %}: `pnpm
+test` (Vitest){% elif backend %}: `uv run pytest`{% endif %}. `{{ check_command }}`
+runs {% if backend and frontend %}both{% else %}it{% endif %}.
+
+{%- if backend %}
+## Backend (pytest)
+
+- **Config:** `pytest` is configured in `pyproject.toml`; warnings are errors, so a deprecation is fixed, not suppressed. Enable `pytest-asyncio` in auto mode, `pytest-randomly` to catch order dependence, `pytest-cov`, and `pytest-xdist` for parallel runs as the suite grows.
+- **Unit:** services tested with in-memory fakes of repositories/adapters (`Protocol`-based). No DB.
+- **Integration:** repositories and routes run against a **real instance of the project's store** (containerized or a managed test instance). Each test cleans up after itself. Never an in-memory substitute that behaves differently from production, and never a mocked data client.
+- **HTTP tests:** drive the application through its real request interface; substitute collaborators at the seam the app exposes for that (injected services, auth override), never by patching internals.
+- **Job handlers:** call the handler directly to test its logic; test enqueue, retry, and idempotency with a synchronous or in-memory queue; test the outbox relay against the real store.
+- **Time and IDs:** inject a `Clock` and ID generator; use `freezegun`/`time-machine` only at boundaries.
+- **Property-based tests** (`hypothesis`) for calculators, state machines, and parsers (money, tax, state transitions).
+- **Third parties:** fake adapters, or recorded contract fixtures. CI never calls real external services.
+
+```python
+@pytest.mark.asyncio
+async def test_br_ord_04_rejects_refund_after_30_days(order_service, paid_order, clock):
+    clock.advance(days=31)
+    with pytest.raises(BusinessRuleError) as exc:
+        await order_service.refund(ctx, paid_order.id, amount=paid_order.total)
+    assert exc.value.code == "REFUND_WINDOW_EXPIRED"
+```
+
+{%- endif %}
+
+{%- if frontend %}
+## Frontend (FSD-aware)
+
+- Colocate tests with the slice: `features/cancel-order/ui/CancelOrderButton.test.tsx`.
+- Test through the **public API** (`index.ts`) where practical; test `model` logic (pure functions, hooks) directly and `ui` through user-level interactions (`@testing-library/user-event`).
+- The generated repo ships Vitest + Testing Library only. Add a network-mocking layer (MSW or `openapi-fetch` middleware) at the `shared/api` boundary when the first test needs it, typed with the generated OpenAPI types so mocks cannot drift from the contract.
+- Query by role/label (what users perceive), not by test IDs or class names.
+- Don't test `shared/ui` primitives exhaustively; test their accessibility contract (roles, keyboard) once.
+- `{{ fsd_lint_command }}` and `eslint` run in CI and in the pre-commit hook; a layer or slice violation fails both.
+{%- endif %}
+{%- if backend or frontend %}
+
+## Mandatory test categories
+
+{%- endif %}
+{%- if backend %}
+- **Authorization matrix:** for each route, allowed and denied roles. A meta-test asserts every route declares a permission.
+- **Tenant isolation:** tenant A can never read or mutate tenant B's data, including via guessed IDs and via raw repository calls with RLS enabled. Failing this blocks release.
+- **Idempotency:** repeated requests/tasks produce one effect.
+- **Concurrency:** invariants (inventory, balances, uniqueness) under parallel operations.
+- **Migrations:** `alembic upgrade head` from empty; autogenerate shows no model diff; upgrade tested on seeded data.
+- **Error paths:** invalid input, dependency failure, timeouts, error envelope shape.
+- **Event-loop safety:** no blocking calls in async paths (enable asyncio debug mode in tests to surface slow callbacks).
+{%- endif %}
+{%- if frontend %}
+- **Every data view:** loading, empty, error, and success states, not only the happy path.
+- **Permission mirroring:** a disabled or hidden action is tested; the backend still rejects the request (the UI is never the only enforcement).
+{%- endif %}
+
+## Naming tests
+
+A test name is a sentence about the product, readable in a CI failure without
+opening the file. The convention below is the one large Python and TypeScript
+codebases use (Django, Flask, FastAPI, Sentry, Radix UI, Cal.com); it is not a
+style preference, so do not invent a variant per file.
+
+**The shape, in both languages:** `<subject> <outcome> when|with|after <condition>`
+— start with the behavior, put the condition last. Omit the condition when the
+test has only one.
+
+{% if backend %}
+### Python
+
+`snake_case`, no `should`, no `test_that`, no spaces. Conditions use `_when_`,
+`_with_`, `_on_`, `_after_`; failures use `_fails`, `_raises`, `_rejects`,
+`_is_not_`, `_never_`.
+
+```python
+def test_expired_token_is_rejected(...)                      # outcome only
+def test_refund_is_rejected_when_window_expired(...)         # outcome + condition
+def test_invoice_totals_include_tax_with_multiple_line_items(...)
+def test_tenant_cannot_read_another_tenants_order(...)       # the negative is the point
+```
+
+- Lead with the business rule ID when the test proves one:
+  `test_br_ord_04_refund_is_rejected_when_window_expired`. The ID goes first so
+  `pytest -k br_ord_04` finds every test for the rule.
+- Name the **rule's** subject (`refund_is_rejected`), not the function under
+  test (`test_call_refund_service_returns_error`). The file already says which
+  service you are in.
+- One behavior per name. A name needing `and` is two tests.
+
+{%- endif %}
+{% if frontend %}
+### TypeScript / React
+
+`describe` names the **subject or the condition**, `it` names the **outcome**.
+Nest at most one level; a second level means the file should be split.
+
+```tsx
+describe('Dialog', () => {
+  describe('when the user clicks outside the content', () => {
+    it('closes the dialog', ...)
+    it('calls onClose once', ...)
+  })
+
+  it('removes the keydown listener on unmount', ...)
+  it('restores focus to the trigger when closed', ...)
+})
+```
+
+- `it` reads as a continuation of `describe`: "Dialog, when the user clicks
+  outside the content, closes the dialog".
+- Write the outcome in the present tense: `closes`, `removes`, `calls`, not
+  `should close`. `should` adds a word to every name and tells the reader
+  nothing.
+- Describe the **effect**, not the implementation:
+  - `removes the keydown listener on unmount` — the effect is observable: no
+    handler fires after unmount.
+  - `has data-state="open"` — an internal attribute; assert it only when it is
+    the component's public contract (a design-system primitive usually is),
+    never as a proxy for "the dialog opened". Assert what the user can tell:
+    the dialog is visible, the trigger reports `aria-expanded="true"`.
+- Name the callback behaviour, not the assertion mechanism: `calls onClose
+  once`, never `calls the spy` or `calls jest.fn`.
+
+{%- endif %}
+
+## Writing good tests
+
+- Arrange / Act / Assert; one logical behavior per test.
+- Build data with factories/builders; each test creates what it needs. Avoid large shared fixtures.
+- Prefer **fakes** over mocks for owned collaborators; mock only at system boundaries.
+- Don't assert on call counts of internals or private methods.
+- No conditionals or loops in tests (use `pytest.mark.parametrize`).
+- Snapshot tests only for small, stable output.
+
+## Coverage and quality gates
+
+- Coverage is a **diagnostic, not a goal.** Baseline: 85% lines on backend services/domain, 80% overall; PRs may not reduce coverage of changed files.
+- Consider mutation testing (`mutmut`, Stryker) on core business logic periodically.
+- Required CI gates: {% if backend %}backend lint and format, strict type checking, `node docs/architecture/backend.verify.mjs` (layer and module rules), backend tests (unit + integration), {% endif %}{% if frontend %}`pnpm format:check`, `pnpm lint`, `pnpm lint:fsd`, `pnpm typecheck`, `pnpm test`, {% endif %}the `adr-drift` check,{% if frontend %} Playwright smoke once `e2e_gate` is on,{% endif %} OpenAPI breaking-change check, generated-types drift check, `pip-audit`/`pnpm audit`, secret scan, axe accessibility. `{{ check_command }}` runs the repository gates.
+
+## Bug fix workflow
+
+1. Write a failing test that reproduces the bug. Confirm it fails for the
+   reported reason, not a setup error (see "Proving a test").
+2. Fix the code.
+3. Confirm the test passes, the rest of the suite passes, and the test fails
+   again when the fix is reverted.
+Regression tests reference the issue ID.
+
+## Non-functional testing
+
+{%- if backend %}
+- **Performance:** k6 or Locust load tests for critical endpoints before major releases; track p95 against SLOs.
+{%- endif %}
+- **Security:** SAST/SCA in CI; periodic DAST and pen test (see `security.md`).
+- **Accessibility:** {% if frontend %}axe in e2e (once `e2e_gate` is on) plus {% endif %}manual keyboard/screen-reader checks for new UI.
+- **Resilience:** behavior when the store, the queue, or a third party is slow or down.
+
+## Commands
+
+```bash
+{%- if backend %}
+uv run pytest                                     # all backend tests
+uv run pytest -q -x                               # fast loop: stop at first failure
+uv run pytest -k br_ord_04                        # one rule
+uv run pytest --cov={{ backend_root }} --cov-report=term-missing
+{%- endif %}
+{%- if frontend %}
+pnpm test                                         # frontend (vitest, one run)
+pnpm test:watch                                   # frontend, watch mode
+pnpm test:e2e                                     # Playwright{% if not e2e_gate %} (enable the gate; see frontend.md){% endif %}
+{%- endif %}
+{{ check_command }}                               # every gate CI runs
+```
+
+## Proving a test
+
+A test that has never failed has not shown it can see the fault it claims to
+guard. Passing is not evidence; a test fails for two reasons only — the code is
+wrong, or the test is wrong about the code.
+
+**For a new behaviour or a bug fix:** the test must fail before the change and
+pass after it.
+
+1. Write the test against the behaviour you want, before writing the code.
+2. Run it. It must fail, and the failure message must name the behaviour, not a
+   syntax or import error. A test that fails for the wrong reason proves nothing.
+3. Write the code until it passes.
+4. For a bug fix, the test you wrote in step 1 that reproduces the report is the
+   regression test; keep it.
+
+**To prove a test can still see its fault after the code exists** (the case a
+reviewer asks about), break the code on purpose, watch the test fail, restore:
+
+```bash
+# keep the source change aside, run the test against the old code
+git stash push -- {{ '<the source file>' }}
+{% if backend %}uv run pytest -k <test name>{% else %}pnpm vitest run <test file>{% endif %}   # must FAIL
+git stash pop
+{% if backend %}uv run pytest -k <test name>{% else %}pnpm vitest run <test file>{% endif %}   # must PASS
+```
+
+This is the check for a rule whose ADR names a **Red test**. A test that stays
+green with the change reverted is not testing the change.
+
+**Planted fault in review:** when a test guards a risky invariant (tenant
+isolation, idempotency, a permission, money), the reviewer may ask for this
+break-and-restore to be pasted in the PR. It takes a minute and it is the only
+proof that the guard is real.
+
+## Numbers in design docs
+
+Every capacity, latency, or size number in `docs/` carries one of three labels:
+
+| Label | Means | Example |
+|---|---|---|
+| `MEASURED` | Observed in this system, with where/when | `MEASURED (load test 2026-11-01): p99 180 ms at 200 RPS` |
+| `TARGET` | The number we designed for and will alert on | `TARGET: p99 < 300 ms` |
+| `GUESS` | No evidence yet; must be replaced before launch | `GUESS: 50 RPS peak` |
+
+An unlabelled number is a hidden guess, and a hidden guess is what makes an
+architecture doc read as fact when it is an assumption. Keep a `GUESS` visible
+rather than deleting it: it is the list of things to measure.
+
+## Anti-patterns to avoid
+
+- Testing the framework or trivial getters
+- Over-mocking so tests pass while the real system is broken
+- Mocking `AsyncSession` instead of using a real database
+- Order-dependent tests or shared mutable state
+- `sleep()`-based waiting (use polling helpers with timeouts or fake timers)
+- `.skip`/`xfail` without a tracked issue

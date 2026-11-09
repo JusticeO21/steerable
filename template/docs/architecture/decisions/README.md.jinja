@@ -1,0 +1,85 @@
+# Architecture Decision Records
+
+One file per decision that is hard to reverse, affects several modules, or
+introduces a technology. Start from `000-template.md`, use the next number, and
+never rewrite a decided ADR; supersede it instead.
+
+This project has no decisions recorded yet. That is expected: a decision is
+recorded when someone makes one, not when a repository is created.
+
+## When a decision needs an ADR
+
+Ask one question: **would reversing this be expensive?**
+
+| Situation | Needs an ADR? |
+|---|---|
+| Choosing how sessions are issued and revoked | Yes: changing later means migrating every user and client |
+| Choosing a job queue over running work inline | Yes: every task handler is written against it |
+| Choosing the database engine or an ORM strategy | Yes |
+| Adding a filter, an endpoint, or a screen | No: `docs/product/business-rules.md` and the code carry it |
+| Following an existing convention (layer order, naming, pagination shape) | No: it is already a rule in the architecture docs |
+
+A convention the docs already require is not a decision; it is a rule. Only a
+choice between viable alternatives, with a real cost to undoing it, becomes an
+ADR.
+
+## How a decision is made
+
+An agent does not pick an option, and does not start implementing, until this
+sequence has run:
+
+1. **Research.** Read the existing code and docs, then gather the real options
+   for the problem.
+2. **Present.** Give each option its advantages, its costs, and the conditions
+   under which it is the wrong choice. Where a fact is needed to compare them
+   (a limit, a price, a known failure mode), cite the source or say the fact is
+   unverified.
+3. **The human decides.** The agent proposes; it does not choose. If the human
+   picks something the research argued against, record that too.
+4. **Write the ADR** at status `Proposed`, with the options that were rejected
+   and why. Only then move it to `Accepted`.
+5. **Implement, with tests.** The ADR's consequences become the acceptance
+   criteria. Each consequence that can be broken by code names its red test in
+   the **Red test** field: the one test that fails when the decision is
+   violated. A consequence no test can reach is written `UNTESTED: <reason>`;
+   the reason is the review, not the excuse. See "Proving a test" in
+   `docs/engineering/testing.md`.
+
+Writing code against a decision that has no ADR, or an ADR that is still
+`Proposed`, is the failure this process exists to prevent.
+
+## Status vocabulary
+
+| Status | Meaning |
+|---|---|
+| `Proposed` | Written, not agreed. Not a constraint. |
+| `Accepted` | Agreed. **Not** evidence the code exists. |
+| `Implemented` | Every path in **Implemented in** exists and every **Verified by** command exists and runs in CI. |
+| `Superseded by ADR-NNN` | Replaced; follow the newer ADR. |
+| `Deprecated` | No longer a rule; kept for history. |
+
+`Implemented` is earned by opening the paths and running the checks, never by
+intent. `adr-drift` in CI (`node docs/architecture/decisions/verify.mjs`) fails
+when:
+
+- an ADR has no `Status` line, or a status outside the five above;
+- an `Implemented` ADR lists no paths in **Implemented in**, or a path is missing;
+- a `Verified by` command does not match a `package.json` script or `Makefile` target;
+- a `Proposed` or `Accepted` ADR lists an `Implemented in` path that already
+  exists (promote the status, or remove the path).
+
+## Decisions
+
+| ADR | Title | Status | Implemented in |
+|---|---|---|---|
+{%- if frontend and not backend %}
+| 001 | Authentication and API contract | _owned by the API repository_ | not in this repository |
+{%- endif %}
+
+{%- if frontend and not backend %}
+
+ADR-001 is made and recorded in the API repository this client calls. Link its
+URL in the row above so readers can find it; do not copy the file here, or the
+two copies will drift. This client never sees or stores a token; it only sends
+the session cookie the server set.
+{%- endif %}

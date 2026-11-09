@@ -1,0 +1,4 @@
+# Fast gate on every commit: format and lint only the staged files.
+# CI runs the full gate (`{{ check_command }}`); a hook can be skipped with
+# --no-verify, CI cannot.
+pnpm exec lint-staged

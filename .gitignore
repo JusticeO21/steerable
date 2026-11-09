@@ -1,0 +1,9 @@
+# Harness output and caches
+__pycache__/
+*.pyc
+
+# Local agent settings are machine-specific and may widen permissions.
+.qoder/settings.local.json
+
+# Rendering artifacts, if check-template.py is pointed at a local directory
+bbp-render/

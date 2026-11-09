@@ -1,0 +1,154 @@
+# Code Review Guidelines
+
+Code review exists to keep the codebase healthy, share knowledge, and catch defects early, while keeping the team moving. The goal is **better code and shared understanding, not gatekeeping or ego.**
+
+## Principles
+
+1. **Be kind, be specific, assume good intent.** Critique code, not people.
+2. **Approve when the change improves overall code health**, even if not how you'd have written it. Don't block on style preferences.
+3. **Speed matters.** Review within **one business day** (ideally within a few hours). Slow reviews are a bottleneck.
+4. **Small PRs.** Aim for under ~400 changed lines, one concern per PR. Large PRs get worse reviews.
+5. **Automate the boring.** Formatting, lint, types, and obvious issues are CI's job, not the reviewer's.
+
+## For authors
+
+Before requesting review:
+- [ ] Self-review the diff as if you were the reviewer
+- [ ] CI is green (`{{ check_command }}`)
+- [ ] PR description explains **what, why, and how to verify**, links the issue, and calls out risks
+- [ ] Screenshots/recordings for UI changes
+- [ ] Tests added/updated, each proven to fail without the change (red and green pasted for risky guards); docs updated if behavior, architecture, or rules changed
+- [ ] Any new ADR names its **Red test**, or marks the consequence `UNTESTED` with a reason
+- [ ] Numbers in design docs are labelled `MEASURED`, `TARGET`, or `GUESS`
+- [ ] Migration is backward compatible; rollout/rollback plan noted if risky
+- [ ] No debugging code, commented-out code, or unrelated changes
+
+PR description template:
+
+```md
+## What / Why
+## How to test
+## Risks & rollout (migrations, flags, perf, security)
+## Checklist
+- [ ] Tests  - [ ] Docs  - [ ] Business rules referenced (BR-...)  - [ ] Security checklist
+```
+
+Responding to feedback: reply to every comment, resolve when addressed, and push back with reasoning if you disagree. If a discussion drags on, talk synchronously and record the outcome in the PR.
+
+## For reviewers: what to look for
+
+Review in this order, spending the most attention at the top.
+
+0. **No code smells survived the linter.** CI already rejects what a tool can
+   prove: complexity and nesting limits, unused arguments and variables,
+   mutable default arguments, shadowed builtins, blocking calls in `async def`,
+   bare `except`, `eval`/`exec`, printing instead of logging, string-built SQL.
+   A reviewer does not repeat those checks; a reviewer asks for the ones a tool
+   cannot see (the table at the end of this document).
+1. **Correctness and requirements**: does it do what was asked and match `business-rules.md`? Edge cases, error paths, off-by-one, null handling, time zones, concurrency, idempotency.
+2. **Design**: right layer (route -> service -> repository)? Fits architecture and ADRs? Appropriate abstraction, not over-engineered or duplicated? Public contracts stable?
+3. **Security**: see checklist below.
+4. **Data and migrations**: reversible/backward compatible, indexed, locks considered, tenant column and constraints present, no N+1.
+5. **Tests**: meaningful, cover failure paths and the business rule, not brittle, not testing implementation details.
+6. **Performance and reliability**: unbounded loops/queries, missing pagination, timeouts, retries, resource leaks, hot paths.
+7. **Readability and maintainability**: clear naming, small functions, comments explain *why* not *what*, consistent with conventions.
+8. **Observability**: useful logs without PII, metrics/traces on new critical paths.
+9. **Dependencies and docs**: new dependency justified? Docs/ADR updated?
+
+### Stack-specific checks
+
+{% if backend %}
+**Backend**
+- [ ] Layering respected (router -> service -> repository); no data-store call outside repositories
+- [ ] No blocking calls inside `async def`; outbound calls have timeouts
+- [ ] Routes declare their response type, status code, and permission; unknown input fields are rejected
+- [ ] No N+1 access; transaction owned by the service and kept short
+- [ ] Type hints complete; no bare `except`; errors raised as typed `AppError`s
+- [ ] Job handlers are idempotent, have timeouts and bounded retries
+- [ ] Migration is backward compatible and hand-reviewed
+{% endif %}
+{% if frontend %}
+
+**Frontend (Feature-Sliced Design)**
+- [ ] Imports follow the layer rule (only downward); no cross-imports between slices of one layer
+- [ ] Slices consumed only through their `index.ts`; no deep imports
+- [ ] Code is on the right layer (see decision table in `frontend.md`); no `utils/`/`helpers/`/`types/` dumping folders
+- [ ] No business logic or entity-specific code in `shared/`
+- [ ] API types come from `shared/api` generated schema (run `{{ api_client_command }}` if the contract changed)
+- [ ] Loading, empty, error states handled; accessibility basics met
+- [ ] Slice naming uses domain language; no premature slicing
+{% endif %}
+
+### Security checklist (mandatory on every PR)
+
+- [ ] Input validated at the edge (Pydantic); unknown fields rejected
+- [ ] AuthN/AuthZ enforced server-side; tenant scoping on every query
+- [ ] No secrets, tokens, or PII in code, logs, errors, or responses
+- [ ] Parameterized queries only; output encoded
+- [ ] New endpoints have rate limiting where abusive use is plausible
+- [ ] Error messages don't leak internals or resource existence across tenants
+
+## Comment conventions
+
+Prefix to signal weight so authors know what is required:
+
+| Prefix | Meaning |
+|---|---|
+| `blocking:` | Must be resolved before merge |
+| `suggestion:` | Improvement worth considering; author decides |
+| `nit:` | Minor/style; ignore freely |
+| `question:` | Seeking understanding; not necessarily a change |
+| `praise:` | Call out good work; do this often |
+
+Write comments that explain the *why* and offer an alternative: "blocking: this loads all orders into memory; paginate or stream, since tenants can have 100k+" beats "this is bad".
+
+## Approval and merge policy
+
+- At least **1 approval** from a code owner; **2** for security-sensitive areas, migrations, or architecture changes (`CODEOWNERS` enforces).
+- Authors cannot approve their own PRs. Approval after new commits to risky areas requires re-review.
+- Merge via **squash** with a Conventional Commit title. Delete the branch after merge.
+- Never merge with failing required checks. No force-push to `main`.
+- Urgent hotfixes may use expedited review but still need one reviewer, plus a follow-up PR for any skipped work.
+
+## Special cases
+
+- **Large refactors:** split into mechanical (no behavior change) and behavioral PRs.
+- **Architecture changes:** require an ADR approved before or alongside the code.
+- **AI-assisted changes:** authors are fully accountable for generated code. Review it with the same rigor; verify it follows `AGENTS.md`, that referenced APIs actually exist, and that tests aren't tautological.
+- **Dependency bumps:** (`uv`/`pnpm` lockfile updates) read changelogs for breaking changes; major bumps need their own PR.
+
+## Disagreements
+
+1. Seek to understand; most conflicts are missing context.
+2. Prefer data (benchmarks, docs, existing conventions) over opinion.
+3. If still stuck, escalate to the tech lead for a decision; capture significant outcomes as an ADR or doc update.
+
+## Review metrics (team health, not individual scoring)
+
+Time to first review, PR size, cycle time, rework rate, and escaped defects. Use to find process bottlenecks, never to rank people.
+
+## Code smells a tool cannot see
+
+The linter proves the mechanical ones. These are judgement calls, and they are
+what the review is for. Each has a test: if you cannot describe the smell
+without naming the rule, it is a `suggestion:`, not a `blocking:`.
+
+| Smell | How it shows up here | Ask instead |
+|---|---|---|
+| Wrong layer | A router holds a rule; a service builds SQL; a repository decides permissions | Can this move down a layer without changing behaviour? |
+| Cross-module reach | One module imports another's `repository` or `schemas` | Should this go through the other module's service, or into a shared module? |
+| Primitive obsession | `dict[str, Any]` or three positional `str`s where `schemas` should name the concept | Is there a type that makes the illegal state unrepresentable? |
+| Leaky abstraction | A storage model in a response, an ORM object in a route signature | Where is the contract boundary, and does it hold? |
+| Flag arguments / boolean blindness | `create(order, True)` | Two functions with names, or an enum? |
+| Shotgun surgery | One rule change touches five modules | Is the rule in the module that owns it? |
+| Feature envy | A method reaches through an object to its data | Is the behaviour on the wrong class or module? |
+| Temporal coupling | Callers must call `setup()` before `send()` | Can construction guarantee the order? |
+| Hidden I/O | A property or `__repr__` that queries the store | Where is the boundary that should forbid it? |
+| Swallowed error | `except Exception: pass`, or a returned `None` where a typed error belongs | What does the caller do when this fails? |
+| Speculative generality | A parameter, abstraction, or config nobody uses | Who needs this today? |
+| Test-only behaviour | Production code branching on `if testing` | Can the seam be injected instead? |
+| Duplicated rule | The same business rule written in two places with two IDs | Which rule ID owns it, and does the other cite it? |
+
+A smell repeated twice is a `suggestion:`. A smell that hides a correctness
+bug, a security gap, or a broken boundary is `blocking:`. A smell that is only
+a preference is a `nit:` or silence; do not block on taste.
