@@ -4,5 +4,9 @@ _commit: {{ _copier_conf.vcs_ref_hash or _copier_conf.vcs_ref or _copier_conf.sr
 _src_path: {{ _copier_conf.src_path }}
 project_type: {{ project_type }}
 {%- for key, value in _copier_answers.items() if key not in ('_commit', '_src_path', 'project_type') %}
+{%- if value is boolean or value is number %}
 {{ key }}: {{ value | tojson }}
+{%- else %}
+{{ key }}: '{{ value | replace("'", "''") }}'
+{%- endif %}
 {%- endfor %}
