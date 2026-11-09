@@ -53,17 +53,18 @@ deciding up front:
 
 ```bash
 # full stack: FastAPI backend + Vite/React frontend
-uvx copier copy --trust gh:JusticeO21/steerable shop \
-  -d backend=true -d frontend=true -d project_name=shop
+uvx copier copy --trust gh:JusticeO21/steerable shop -d backend=true -d frontend=true -d project_name=shop
 
 # API only: no package.json, no eslint, no husky
-uvx copier copy --trust gh:JusticeO21/steerable shop-api \
-  -d backend=true -d frontend=false
+uvx copier copy --trust gh:JusticeO21/steerable shop-api -d backend=true -d frontend=false
 
 # web client only: calls an API served elsewhere
-uvx copier copy --trust gh:JusticeO21/steerable shop-web \
-  -d backend=false -d frontend=true
+uvx copier copy --trust gh:JusticeO21/steerable shop-web -d backend=false -d frontend=true
 ```
+
+Each line is one command on purpose: a trailing `\` continues a line only in
+bash and zsh. In PowerShell or cmd it reaches copier as an extra argument
+(`Expected at most 2 positional arguments`).
 
 ### Full walkthrough (full stack)
 
