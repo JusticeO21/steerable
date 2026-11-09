@@ -4,7 +4,7 @@ The frontend follows **[Feature-Sliced Design (FSD)](https://feature-sliced.desi
 
 ## Stack
 
-{{ frontend_language }} strict, {{ ui_stack }}, TanStack Query (server state), React Hook Form + Zod (forms), {{ design_system }}, `openapi-typescript` + `openapi-fetch` (generated API types and client), Vitest + Testing Library, {% if project_type == 'full-stack' %}Playwright (e2e), {% endif %}**Steiger** (FSD linter) + ESLint.
+{{ frontend_language }} strict, {{ ui_stack }}, TanStack Query (server state), React Hook Form + Zod (forms), {{ design_system }}, `openapi-typescript` + `openapi-fetch` (generated API types and client), Vitest + Testing Library, {% if project_type == 'full-stack' %}Playwright (e2e), {% endif %}ESLint (with FSD boundary rules) + a `frontend.verify.mjs` check.
 
 ## The three levels of FSD
 
@@ -155,7 +155,10 @@ Do not copy server data into a global store. Compose with props and slots first,
 
 ## API client and types (contract-first)
 
-- The backend publishes an OpenAPI schema (FastAPI). `{{ api_client_command }}` runs `openapi-typescript` and writes types to `shared/api/schema.d.ts` (committed, regenerated in CI; drift fails the build).
+- The backend publishes an OpenAPI schema (FastAPI). `{{ api_client_command }}` runs
+  `openapi-typescript` against `{{ openapi_schema }}` and writes types to
+  `shared/api/schema.d.ts` (committed, regenerated in CI; drift fails the build).
+  The source is the file or URL in the `gen:api` script in `package.json`.
 - `shared/api` also contains the typed fetch client (`openapi-fetch`), auth/CSRF header injection, and mapping of the backend error envelope (`error.code`) to a typed `ApiError`.
 - **Never hand-write types for API payloads.** Entities may define *domain* types derived from the generated ones.
 - Entities wrap raw calls into domain-friendly functions in their `api` segment; pages/features never call the http client directly.

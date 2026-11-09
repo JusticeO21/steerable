@@ -1,0 +1,8 @@
+# Changes here will be overwritten by Copier; NEVER EDIT MANUALLY
+# `copier update` reads this to three-way-merge the template's later changes.
+_commit: {{ _copier_conf.vcs_ref_hash or _copier_conf.vcs_ref or _copier_conf.src_path }}
+_src_path: {{ _copier_conf.src_path }}
+project_type: {{ project_type }}
+{%- for key, value in _copier_answers.items() if key not in ('_commit', '_src_path', 'project_type') %}
+{{ key }}: {{ value | tojson }}
+{%- endfor %}

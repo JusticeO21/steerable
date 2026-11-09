@@ -25,7 +25,7 @@ this table is fixed in the same change.
 | `{{ frontend_root }}/src/pages/*/model/content.ts` | [frontend.md](frontend.md) | Page copy lives here, not in JSX |
 | `{{ frontend_root }}/src/shared/ui/` | [frontend.md](frontend.md), [security.md](security.md) | Business-agnostic only; no data fetching; accessible primitives land here |
 | `{{ frontend_root }}/src/shared/api/` | [frontend.md](frontend.md) | Generated types only; the typed client, auth header injection, and error mapping live here |
-| `{{ frontend_root }}/steiger.config.ts` | [frontend.md](frontend.md) | Changing a boundary rule requires an ADR |
+| `eslint.config.mjs`, `docs/architecture/frontend.verify.mjs` | [frontend.md](frontend.md) | The two FSD rule sets must agree; changing a boundary rule requires an ADR |
 {% endif %}
 | `docs/product/business-rules.md` | — | A rule change needs the rule owner's approval; IDs are stable |
 | `docs/architecture/decisions/` | `decisions/000-template.md` | Decided ADRs are never edited; supersede with a new one |

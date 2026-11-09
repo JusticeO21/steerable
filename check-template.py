@@ -188,6 +188,13 @@ def check(target: Path, name: str, answers: dict[str, str]) -> None:
         if frontend != (target / required).exists():
             fail(name, f"{required} {'missing' if frontend else 'present'} for a {'frontend' if frontend else 'backend-only'} repo")
             problems += 1
+    # A directory that only one stack owns must not appear in the other scope:
+    # copier keeps an emptied directory, so a stray `src/backend/` looks like a
+    # full-stack layout and sends agents to code that is not there.
+    for owned, wanted in (("src/backend", answers.get("backend") == "true"), ("src/frontend", frontend)):
+        if not wanted and (target / owned).exists():
+            fail(name, f"{owned}/ exists in a scope that does not own it")
+            problems += 1
     header = (target / ".header.json").read_text(encoding="utf-8")
     for declared in re.findall(r'"frontend_toolchain": \[([^\]]*)\]', header):
         for path in re.findall(r'"([^"]+)"', declared):

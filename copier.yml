@@ -1,6 +1,25 @@
 _min_copier_version: "9.4.0"
 _subdirectory: template
 _templates_suffix: .jinja
+# Copier skips a directory whose rendered name is empty, but keeps a directory
+# whose files all render empty: a frontend-only repo came out with an empty
+# src/backend/, which reads as "there is a backend here". The copy task prunes
+# the trees the scope does not own; the update task also prunes folders left
+# empty. `update` runs it only when .copier-answers.yml says the task existed in
+# the old version, which is why both live here from the first release.
+_tasks:
+  # The task runs inside the generated repo, so the cwd is its root.
+  - >-
+    python -c "import os, pathlib, shutil;
+    root = pathlib.Path(os.getcwd());
+    stale = list({{ ('src/backend', 'tools') if not backend else () }}) + list({{ ('src/frontend', 'e2e') if not frontend else () }});
+    [shutil.rmtree(root / p) for p in stale if (root / p).is_dir()];
+    [d.rmdir() for d in sorted(root.rglob('*'), reverse=True) if d.is_dir() and not {'node_modules', '.git'} & set(d.parts) and not any(d.iterdir())]"
+  - >-
+    python -c "import os, pathlib, shutil;
+    root = pathlib.Path(os.getcwd());
+    [d.rmdir() for d in sorted(root.rglob('*'), reverse=True) if d.is_dir() and not {'node_modules', '.git'} & set(d.parts) and not any(d.iterdir())]"
+    when: "{{ _copier_operation == 'update' }}"
 _message_before_copy: |
   This template generates a repository whose AGENTS.md and docs/ hold the same
   rules for every project. The first two questions decide which rules exist.
@@ -13,6 +32,38 @@ _message_after_copy: |
     3. AGENTS.md                      - the rules every agent must follow
 
   Then read "START HERE" in AGENTS.md and complete the first-run steps.
+
+# Answers that describe the template, not the project: they would be empty or
+# wrong in .copier-answers.yml, so they are not recorded. Questions without a
+# default are secret by necessity (copier refuses to reuse stored answers that
+# it would not ask anyway).
+_secret_questions:
+  - product_summary
+  - business_rules_source
+  - backend_linter
+  - python_version
+  - backend_stack
+  - worker_stack
+  - db_conventions
+  - frontend_language
+  - design_system
+  - api_client_command
+  - openapi_schema
+  - api_types_owner
+  - repo_layout
+  - tiering_hook
+  - dev_server_probe
+  - frontend_unit_command
+  - frontend_typecheck_command
+  - frontend_lint_command
+  - fsd_lint_command
+  - e2e_command
+  - backend_lint_command
+  - backend_types_command
+  - backend_test_command
+  - migrate_command
+  - api_curl_command
+  - ci_gates
 
 # The scope decision. Everything scoped converges on these three booleans,
 # so no template block has to switch on a string.
@@ -118,8 +169,11 @@ api_client_command:
 openapi_schema:
   type: str
   help: >-
-    Where openapi-typescript reads the schema from. A local file is checked by
-    the build; a URL is fetched, so CI needs network.
+    The path or URL `pnpm gen:api` (openapi-typescript) reads the schema from,
+    e.g. ./openapi.json or https://api.example.com/openapi.json. Not the route
+    the backend serves it at: in a full-stack repo the backend exports
+    openapi.json at the root, and the frontend types are generated from that
+    file. Leave the default unless the project already knows its own address.
   when: "{{ frontend }}"
   default: >-
     {%- if backend -%}
