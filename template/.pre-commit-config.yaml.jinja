@@ -1,7 +1,11 @@
 # Runs on every commit. CI runs the same hooks, because a hook can be skipped
 # locally with --no-verify.
 #
-#   uv run pre-commit install          install the hook (the setup command does this)
+{% if frontend %}# husky owns the git hook here (it runs lint-staged on the frontend).
+# `pre-commit install` would replace that hook, so it is not run in this scope.
+# These hooks run in CI, and here with `uv run pre-commit run --all-files`.
+#{% else %}#   uv run pre-commit install          install the hook (the setup command does this)
+#{% endif %}
 #   uv run pre-commit run --all-files  run everything now
 #
 # Versions are pinned. Update with `uv run pre-commit autoupdate`.

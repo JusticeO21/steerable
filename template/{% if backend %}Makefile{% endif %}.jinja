@@ -22,7 +22,12 @@ setup: hooks
 
 hooks:
 	uv sync --all-groups
+{%- if frontend %}
+	@echo "pre-commit install is skipped: husky owns core.hooksPath and runs lint-staged."
+	@echo "Backend gates run through make check and CI."
+{%- else %}
 	uv run pre-commit install
+{%- endif %}
 
 fmt:
 	uv run ruff format .

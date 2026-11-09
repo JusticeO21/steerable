@@ -200,6 +200,8 @@ setup_command:
   # The frontend half installs dependencies, makes the pre-commit hook
   # executable (templates copied on Windows lose the mode, and git refuses to
   # run a non-executable hook), then runs husky's installer.
+  # `pre-commit install` is backend-only: it sets core.hooksPath to .git/hooks,
+  # which disables husky when both stacks exist.
   default: >-
     {%- if frontend -%}
     {{ package_manager }} install && chmod +x .husky/pre-commit && node -e "require('husky')"
@@ -207,7 +209,7 @@ setup_command:
     {%- if frontend and backend -%}
     ; {% endif -%}
     {%- if backend -%}
-    uv sync --all-groups && uv run pre-commit install
+    uv sync --all-groups{% if not frontend %} && uv run pre-commit install{% endif %}
     {%- endif %}
 
 dev_command:
