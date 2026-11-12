@@ -1,41 +1,31 @@
 # Architecture: which rules apply to which path
 
-`AGENTS.md` holds the rules every file obeys. This page narrows them per path so
-an agent editing one file does not have to read every document.
+`AGENTS.md` holds rules that every file obeys. This page narrows them per path
+so an agent editing one file does not have to read every document.
 
 The table is the source of truth for **where** a rule applies. For **what** the
-rule is, follow the linked document; when the two disagree, the document wins and
-this table is fixed in the same change.
+rule is, follow the linked document; when the two disagree, the document wins
+and this table is fixed in the same change.
 
 ## Which rules apply to this path
 
 | Path | Read before editing | Extra rules that apply only here |
 |---|---|---|
-{% if backend %}
-| `{{ backend_root }}/app/core/` | [backend.md](backend.md), [security.md](security.md) | Config comes from settings only; no `os.environ` reads elsewhere; secrets typed as secret fields |
-| `{{ backend_root }}/app/modules/*/router.py` | [backend.md](backend.md) | Every route declares its response type, status code, and permission; request schemas reject unknown fields; the router holds no business rules |
-| `{{ backend_root }}/app/modules/*/service.py` | [backend.md](backend.md) | Owns the transaction boundary; no web-framework imports; raises typed domain errors |
-| `{{ backend_root }}/app/modules/*/repository.py` | [backend.md](backend.md), [database.md](database.md) | Holds every data-store call for the module; never commits; always filters by tenant |
-| `{{ backend_root }}/app/modules/*/models.py` | [database.md](database.md) | Present only if the project uses an ORM; no business logic; never returned from a router |
-| `{{ backend_root }}/app/modules/*/tasks.py` | [backend.md](backend.md) | Idempotent, bounded retries, time limits, small payloads (IDs only) |
-| `{{ migrations_root }}/` | [database.md](database.md) | Forward-only; never edit an applied migration; expand/contract |
-{% endif %}
-{% if frontend %}
-| `{{ frontend_root }}/src/app/` | [frontend.md](frontend.md) | Layer `app` only wires things; route adapters contain imports and re-exports, no markup or copy |
-| `{{ frontend_root }}/src/pages/*/model/content.ts` | [frontend.md](frontend.md) | Page copy lives here, not in JSX |
-| `{{ frontend_root }}/src/shared/ui/` | [frontend.md](frontend.md), [security.md](security.md) | Business-agnostic only; no data fetching; accessible primitives land here |
-| `{{ frontend_root }}/src/shared/api/` | [frontend.md](frontend.md) | Generated types only; the typed client, auth header injection, and error mapping live here |
-| `eslint.config.mjs`, `docs/architecture/frontend.verify.mjs` | [frontend.md](frontend.md) | The two FSD rule sets must agree; changing a boundary rule requires an ADR |
-{% endif %}
+| `{{ frontend_source_root }}/app/` | [frontend.md](frontend.md) | Composition root only; route adapters contain imports and re-exports, no markup or copy |
+| `{{ frontend_source_root }}/pages/*/model/content.ts` | [frontend.md](frontend.md) | Page copy lives here, not in JSX |
+| `{{ frontend_source_root }}/shared/ui/` | [frontend.md](frontend.md), [security.md](security.md) | Business-agnostic only; no data fetching; accessible primitives land here |
+| `{{ frontend_source_root }}/shared/api/` | [frontend.md](frontend.md) | Generated types only; typed client and error mapping live here |
+| `{{ frontend_root }}/eslint.config.mjs`, `docs/architecture/frontend.verify.mjs` | [frontend.md](frontend.md) | The two FSD rule sets must agree; changing a boundary rule requires an ADR |
 | `docs/product/business-rules.md` | — | A rule change needs the rule owner's approval; IDs are stable |
 | `docs/architecture/decisions/` | `decisions/000-template.md` | Decided ADRs are never edited; supersede with a new one |
 | `AGENTS.md`, this file | — | A rule change here is an architecture change: say why in the PR, and keep every command verifiable |
 
 ## Adding a path
 
-Add a row when a path has a rule that does not apply repository-wide, or when it
-is edited often enough that "read everything first" is too expensive. Every row
-must link to a document that exists; a row pointing at a missing file is a bug.
+Add a row when a path has a rule that does not apply repository-wide, or when
+it is edited often enough that "read everything first" is too expensive. Every
+row must link to a document that exists; a row pointing at a missing file is a
+bug.
 
-An agent that finds its path is **not** in this table follows `AGENTS.md` only,
-and says so rather than inventing a rule.
+An agent whose path is **not** in this table follows `AGENTS.md` only and says
+so rather than inventing a rule.

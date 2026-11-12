@@ -64,7 +64,7 @@ when:
 
 - an ADR has no `Status` line, or a status outside the five above;
 - an `Implemented` ADR lists no paths in **Implemented in**, or a path is missing;
-- a `Verified by` command does not match a `package.json` script or `Makefile` target;
+- a `Verified by` command does not match a `package.json` script or checked-in script;
 - a `Proposed` or `Accepted` ADR lists an `Implemented in` path that already
   exists (promote the status, or remove the path).
 
@@ -72,14 +72,9 @@ when:
 
 | ADR | Title | Status | Implemented in |
 |---|---|---|---|
-{%- if frontend and not backend %}
 | 001 | Authentication and API contract | _owned by the API repository_ | not in this repository |
-{%- endif %}
-
-{%- if frontend and not backend %}
 
 ADR-001 is made and recorded in the API repository this client calls. Link its
 URL in the row above so readers can find it; do not copy the file here, or the
 two copies will drift. This client never sees or stores a token; it only sends
 the session cookie the server set.
-{%- endif %}

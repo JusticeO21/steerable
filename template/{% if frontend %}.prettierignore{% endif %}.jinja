@@ -11,7 +11,6 @@ pnpm-lock.yaml
 .header.json
 # GitHub Actions YAML: the `on:`/`jobs:` key handling differs from Prettier's.
 .github/
-# Structural checkers that also ship to repos with no frontend; keep one style.
-docs/architecture/backend.verify.mjs
+# Structural checker; keep one style.
 docs/architecture/decisions/verify.mjs
-{{ frontend_root }}/src/shared/api/schema.d.ts
+{{ frontend_source_root }}/shared/api/schema.d.ts

@@ -4,118 +4,73 @@
 
 ## Goals and non-goals
 
-**Goals:** correctness of business data, tenant isolation, operability by a small team, fast iteration, predictable cost.
+**Goals:** correct presentation of product data, accessible interactions,
+reliable client behavior, and fast iteration.
 
-**Non-goals (for now):** multi-region active-active, microservices, event sourcing. We deliberately start as a **modular monolith**; split only when a measured problem demands it.
+**Non-goals:** owning server-side business rules, persistence, authentication
+decisions, or API operations. Those belong to the service this app calls.
 
 ## System context
 
-{% if project_type == 'full-stack' %}
-```
- Browser --HTTPS--> CDN / Edge --> Frontend (static SPA, FSD)
-    |
-    +--HTTPS /api/v1--> API service --> Data store (system of record)
-                              |   |
-                              |   +--enqueue--> Job queue --> Workers
-                              |
-                              +--> Identity Provider
-```
-
-The API and the workers share one backend package and its domain code, but
-deploy as separate processes so they scale independently.
-{% elif project_type == 'frontend-only' %}
 ```
  Browser --HTTPS--> CDN / Edge --> Frontend (static SPA, FSD)
                                        |
-                                       +--HTTPS /api/v1--> API service (owned by another repository)
-                                       +--> Identity Provider (owned by the API repository)
+                                       +--HTTPS /api/v1--> API service
 ```
 
-This repository ships only the frontend. The API, its database, and its jobs
-live in the service it calls. The contract between them is the OpenAPI schema,
-regenerated with `{{ api_client_command }}`; a breaking change there is a
-cross-repository event, not a local refactor.
-{% else %}
-```
- Clients --HTTPS /api/v1--> API service --> Data store (system of record)
-                                  |   |
-                                  |   +--enqueue--> Job queue --> Workers
-                                  |
-                                  +--> Identity Provider
-```
-
-This repository ships only the backend. Its browser clients are built and
-deployed separately and consume the OpenAPI schema this service publishes.
-{% endif %}
+This repository ships the browser application only. Its API, identity, data,
+and background processing are owned by separate services. The OpenAPI schema
+is the contract; regenerate client types with `{{ api_client_command }}` when
+that contract changes.
 
 ## Components
 
 | Component | Responsibility | Tech |
 |---|---|---|
-{% if frontend %}
 | Frontend | UI, routing, client state | {{ frontend_language }}, {{ design_system }}, **Feature-Sliced Design** |
-{% endif %}
-{% if backend %}
-| API | Business logic, authorization, persistence | Assumed: {{ backend_stack }}; settled in an ADR |
-| Workers | Async and scheduled jobs | Assumed: {{ worker_stack }}; settled in an ADR |
-| Data store | System of record; schema changes in `{{ migrations_root }}` | Assumed: PostgreSQL; settled in an ADR |
-| Job queue | Asynchronous work, sessions, short-lived cache | Assumed: Redis; settled in an ADR |
-| IdP | Identity, MFA, SSO | Assumed: external OIDC provider; settled in an ADR |
-{% endif %}
+| API client | Typed requests and response mapping | `openapi-fetch`, generated OpenAPI types |
+| Client cache | Disposable server-state cache | TanStack Query |
 
-## Key architectural principles
+## Architectural principles
 
-{% if project_type == 'full-stack' %}
-1. **Modular monolith.** Backend code is organized by domain module (`accounts`, `billing`, `orders`...). Modules talk through explicit service interfaces, never by reaching into another module's tables or internals. The frontend mirrors this with FSD slices.
-{% elif project_type == 'frontend-only' %}
-1. **Slices mirror the API's domains.** FSD slices are named after the domain terms the API uses, so a client change can be traced to the resource it affects.
-{% else %}
-1. **Modular monolith.** Code is organized by domain module (`accounts`, `billing`, `orders`...). Modules talk through explicit service interfaces, never by reaching into another module's tables or internals.
-{% endif %}
-2. **The system-of-record store is the source of truth.** Every other component (cache, queue, search index) holds only reconstructable or transient data.{% if project_type == 'frontend-only' %} In this repository the source of truth is the API; the client cache is disposable.{% endif %}
-3. **Stateless services.** Any instance of a service can serve any request.
-4. **Contract-first types.** {% if project_type == 'full-stack' %}The API generates its OpenAPI schema from Pydantic models; the frontend generates its API types from it. Client and server cannot silently drift.{% elif project_type == 'frontend-only' %}The API publishes an OpenAPI schema; this repository generates its client types from it and fails CI on drift.{% else %}The OpenAPI schema is exported in CI, diffed for breaking changes, and consumed by the client's type generation.{% endif %}
-5. **Secure by default.** Deny-by-default authorization; tenant scoping enforced in the data layer.
-6. **Idempotency and retries everywhere asynchronous.** Assume at-least-once delivery.
-7. **Boring technology.** Prefer mature tools. Novelty must be justified by an ADR.
-8. **Observable.** Every request and job carries a correlation ID through logs, traces, and metrics.
+1. **Slices mirror product domains.** FSD slices use domain terms so a UI
+   change can be traced to the product concept it affects.
+2. **The API owns authoritative data and rules.** Client state is a disposable
+   cache; the interface may improve feedback but never authorizes an operation.
+3. **Contract-first types.** The API publishes an OpenAPI schema; this app
+   generates types from it and checks for drift.
+4. **Secure by default.** Do not store credentials in browser-accessible
+   storage. The service validates every operation independently.
+5. **Boring technology.** Prefer mature tools. Novelty must be justified by an
+   ADR.
+6. **Observable.** Client errors carry route, release, and request identifiers
+   without including secrets or personal data.
 
 ## Request lifecycle
 
-{% if backend %}
-1. Request hits the edge; TLS terminated, basic rate limiting applied.
-2. Middleware/dependencies: correlation ID -> authentication (session) -> tenant resolution -> permission check -> input validation.
-3. The **router** calls a **service**, which enforces business rules and authorization of the specific resource.
-4. The service uses **repositories** inside one transaction when multiple writes must be atomic.
-5. Domain events needing async work are written to the **outbox** (same transaction) and relayed to the queue.
-6. The response is serialized through a response model; internal fields never leak.
-{% else %}
-1. Request hits the CDN/edge; static assets are served from cache.
-2. The browser loads a route lazily from `pages/<page>`, then the page composes widgets, features, and entities.
-3. Data comes from the entity's `api` segment through TanStack Query; the URL owns filters and pagination.
-4. Mutations run from a feature and invalidate the entity's query keys on success.
-5. Loading, empty, error, and success are all explicit states; errors render from the API's `error.code`, never from raw response text.
-{% endif %}
+1. The CDN serves static assets; the browser loads a route from `src/pages/`.
+2. The page composes widgets, features, and entities following FSD boundaries.
+3. Data is requested through `src/shared/api/` and TanStack Query; URL state
+   owns shareable filters and pagination.
+4. Mutations run from features and invalidate affected query keys on success.
+5. Loading, empty, error, and success states are explicit. Errors are mapped
+   from the API contract, never displayed from raw response text.
 
-## {% if backend == false %}Client boundaries{% else %}Multi-tenancy{% endif %}
+## Client boundaries
 
-{% if backend %}
-Every tenant-owned row carries a tenant identifier, and scoping is enforced twice: the repository always filters by tenant, and the store rejects cross-tenant access on its own. The store-level mechanism is a strategy decision; the existence of the second layer is not (see `database.md`).
-{% else %}
-The frontend never decides tenancy. Every request carries the server's session cookie (owned by the API repository); the server resolves the tenant and the client only ever sees what the server already filtered. Never keep another tenant's data across a session, and clear query caches on sign-out.
-{% endif %}
+The client never decides identity, permissions, or tenancy. The service
+resolves these on every request. Clear client caches when the user signs out
+and never retain data across sessions.
 
 ## Repository layout
 
 ```
-{% if backend %}{{ backend_root }}/
-  app/            # API package (see backend.md)
-{% endif %}{{ migrations_root }}/    # migrations (see database.md)
-{% if frontend %}{{ frontend_root }}/
-  src/            # FSD layers (see frontend.md)
-{% endif %}{% if backend %}tests/backend/
-{% endif %}{% if project_type == 'full-stack' %}tests/e2e/
-{% endif %}docs/
+{{ frontend_root }}/
+  package.json, configs
+{{ frontend_source_root }}/
+  app/, pages/, widgets/, features/, entities/, shared/
+e2e/
+docs/
 ```
 
 ## Environments
@@ -124,66 +79,35 @@ The frontend never decides tenancy. Every request carries the server's session c
 |---|---|---|
 | local | Development | Seeded fake data |
 | ci | Automated tests | Ephemeral |
-| staging | Pre-production verification | Anonymized/synthetic |
+| staging | Pre-production verification | Synthetic |
 | production | Live | Real; access audited |
 
-Configuration comes from environment variables, validated at boot; the process refuses to start on invalid config.
+## Non-functional targets
 
-## Non-functional targets (initial SLOs)
-
-| Concern | Target |
+| Concern | Initial target |
 |---|---|
-{% if backend %}
-| API availability | 99.9% monthly |
-| API latency | p95 < 300 ms, p99 < 1 s (excluding exports/reports) |
-| Job latency | 95% of jobs start within 30 s of enqueue |
-| RPO / RTO | RPO <= 5 min, RTO <= 1 h |
-| Data durability | Daily backups + point-in-time recovery, restore tested quarterly |
-{% endif %}
-{% if frontend %}
-| Initial JS | <= 200 KB gzipped on the main route |
+| Initial JavaScript | <= 200 KB gzipped on the main route |
 | LCP / INP / CLS | < 2.5 s / < 200 ms / < 0.1 |
 | Accessibility | WCAG 2.2 AA |
-{% endif %}
 
 ## Observability
 
-{% if backend %}
-- **Logs:** structured JSON, no PII or secrets.
-- **Metrics:** rate, errors, and duration per route; queue depth, age, and failure rate per task.
-- **Traces:** OpenTelemetry across API, database, workers, and outbound calls.
-- **Alerts:** symptom-based (SLO burn). Every alert links to a runbook.
-{% endif %}
-{% if frontend %}
-- **Client errors:** one error-reporting sink; every report carries the route, release, and request ID.
-- **Web vitals:** LCP, INP, and CLS reported per route.
-- **Build output:** bundle-size budget checked in CI.
-{% endif %}
+- **Client errors:** one reporting sink; include route, release, and request ID.
+- **Web vitals:** report LCP, INP, and CLS per route.
+- **Build output:** enforce a bundle-size budget in CI.
 
 ## Deployment
 
-{% if backend %}
-Containerized, immutable images, deployed via CI/CD with automated rollback on failed health checks. Migrations in `{{ migrations_root }}` run before app rollout and must be backward compatible (expand/contract) so rollbacks are safe.
-{% endif %}
-{% if frontend %}
-The frontend is built to static assets and served from a CDN with immutable, content-hashed filenames; the HTML entry is never cached long.
-{% endif %}
+Build static assets and serve them from a CDN with immutable, content-hashed
+filenames. Do not cache the HTML entry for long.
 
 ## Known risks and trade-offs
 
-{% if backend %}
-- Module boundaries can erode; mitigated by enforced import contracts in CI.
-- Shared-schema tenancy risks cross-tenant leaks; mitigated by row-level security and mandatory tenant-isolation tests.
-- A single database primary is a scaling ceiling; mitigated by indexing discipline, read replicas, and caching before sharding.
-{% endif %}
-{% if frontend %}
-- The client is at best a second enforcement point: UX may mirror a business rule, never own it (see `frontend.md`).
-- Bundle growth; mitigated by route-level code splitting and the size budget in CI.
-{% endif %}
-{% if project_type == 'frontend-only' %}
-- The API contract can change without this repository noticing; mitigated by regenerating types in CI and failing on drift.
-{% endif %}
+- The API contract can change without this repository noticing; regenerate
+  types in CI and fail on drift.
+- Client-side checks are only for usability; the service enforces every rule.
+- Bundle growth is mitigated by route-level code splitting and a CI size budget.
 
 ## Related
 
-{% if backend %}[backend](backend.md) · [database](database.md) · {% endif %}{% if frontend %}[frontend](frontend.md) · {% endif %}[security](security.md) · [decisions](decisions/)
+[Frontend](frontend.md) · [Security](security.md) · [Decisions](decisions/)

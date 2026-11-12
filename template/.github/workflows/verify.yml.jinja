@@ -15,36 +15,7 @@ concurrency:
 permissions:
   contents: read
 
-jobs:{% if backend %}
-  backend:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: astral-sh/setup-uv@v6
-        with:
-          python-version: '{{ python_version }}'
-          enable-cache: true
-
-      - run: uv sync --locked --all-groups
-
-      - name: format
-        run: uv run ruff format --check .
-
-      - name: lint
-        run: uv run ruff check .
-
-      - name: types (strict)
-        run: uv run mypy --strict {{ backend_root }}
-
-      - name: tests
-        run: uv run pytest
-
-      - name: boundary-check (docs/architecture/backend.verify.mjs)
-        run: node docs/architecture/backend.verify.mjs
-{%- endif %}
+jobs:
 
   docs:
     runs-on: ubuntu-latest
@@ -64,6 +35,11 @@ jobs:{% if backend %}
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # The app is where the lockfile and node_modules are; its scripts resolve
+    # paths from it.
+    defaults:
+      run:
+        working-directory: {{ frontend_root }}
 
     steps:
       - uses: actions/checkout@v4

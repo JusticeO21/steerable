@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '..', '..')
-const srcRoot = join(repoRoot, '{{ frontend_root }}', 'src')
+const srcRoot = join(repoRoot, '{{ frontend_source_root }}')
 
 // Most dependent first. A layer may import only from layers to its right.
 const LAYERS = ['app', 'pages', 'widgets', 'features', 'entities', 'shared']
@@ -66,8 +66,8 @@ function identify(absPath) {
   return { layer, slice: rel[1], rel }
 }
 
-// Resolves an import specifier to a file inside src/, or null when it points
-// outside src/ (a package, a test file without its own sibling, node types).
+// Resolves an import specifier to a file inside the frontend root, or null when it points
+// outside the frontend root (a package, a test file without its own sibling, node types).
 function resolveImport(specifier, fromFile) {
   let base
   if (specifier.startsWith('@/')) base = join(srcRoot, specifier.slice(2))
@@ -101,7 +101,7 @@ function specifiers(source) {
 
 const files = walk(srcRoot)
 if (files.length === 0) {
-  console.log(`frontend-check: no source under {{ frontend_root }}/src yet; nothing to verify`)
+  console.log(`frontend-check: no source under {{ frontend_source_root }} yet; nothing to verify`)
   process.exit(0)
 }
 

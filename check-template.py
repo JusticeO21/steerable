@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Renders the template for each scope and fails on what copier exits on or
+"""Renders the frontend template and fails on what copier exits on or
 what a generated project would trip over: unrendered Jinja, broken doc links,
-a collapsed CI gate list, or a backend-only repo that carries frontend files.
+a collapsed CI gate list, or a frontend repo with backend files.
 
 Runs copier as a module with absolute paths, so it behaves the same from cmd,
 PowerShell, Git Bash and CI (the `copier` entry point cannot start prompt_toolkit
@@ -28,36 +28,38 @@ COMMON = {
     "business_rules_source": "TODO: name the source of truth for business rules and how a rule is numbered (for example: product owner keeps BR-<AREA>-<NN> in the tracker).",
     "language": "TypeScript",
     "package_manager": "pnpm",
-    "ui_stack": "React Router (Vite SPA)",
+    "ui_stack": "Vite + React SPA",
     "design_system": "Radix primitives + Tailwind CSS",
     "api_client_command": "pnpm gen:api",
     "frontend_language": "TypeScript",
-    "backend_linter": "ruff",
-    "backend_stack": "Python, FastAPI, Pydantic, SQLAlchemy 2.0 (async)",
-    "worker_stack": "Celery, same codebase, separate process",
-    "db_conventions": "snake-case-uuidv7",
-    "backend_root": "src/backend",
-    "frontend_root": "src/frontend",
-    "migrations_root": "src/backend/migrations",
+    "frontend_root": ".",
+    "frontend_source_root": "src",
     "repo_layout": "",
     "tiering_hook": "docs/architecture/path-rules.md has a table.",
 }
 
 SCOPES = [
-    ("full-stack", {"backend": "true", "frontend": "true"}, "served-by-this-repo"),
-    ("frontend-only", {"backend": "false", "frontend": "true"}, "remote-schema"),
-    ("backend-only", {"backend": "true", "frontend": "false"}, "remote-schema"),
+    (
+        "frontend",
+        {
+            "frontend": "true",
+            "frontend_root": ".",
+            "frontend_source_root": "src",
+            "project_type": "frontend-only",
+        },
+    ),
 ]
 
 LINK = re.compile(r"\]\((\.{0,2}/?[A-Za-z0-9./_-]+\.md)")
 # A `${{ ... }}` expression is GitHub Actions syntax, not leftover Jinja.
-JINJA = re.compile(r"(?<!\$)\{\{.*?\}\}|\{%.*?%\}|\{%.*$|%\}")
+# `{{ f"{{{x}}}" }}` in Python is one f-string brace, and `{{` in JSX is an
+# object, so a doubled brace is not left-over Jinja.
+JINJA = re.compile(r"(?<!\$)(?<!\{)\{\{(?!\{).*?(?<!\})\}\}(?!\})|\{%.*?%\}|\{%.*$|%\}")
 
 def copier_files() -> list[str]:
     """Every file path copier will walk. It renders each path, applies files
     whose name ends up empty, and never recurses into a directory whose rendered
-    name is empty — so `src/{% if backend %}backend{% endif %}/...` silently
-    generates nothing. Paths listed here still contain their own template."""
+    name is empty. Paths listed here still contain their own template."""
     files = []
     subdirectory = ROOT / "template"
 
@@ -75,9 +77,31 @@ def copier_files() -> list[str]:
     return files
 
 
+def frontend(answers: dict[str, str]) -> bool:
+    return answers.get("frontend") == "true"
+
+
+# Frontend toolchain files written from the template without installing packages.
+TOOLCHAIN = (
+    "prettier.config.mjs",
+    "playwright.config.ts",
+    ".husky/pre-commit",
+    ".editorconfig",
+    ".prettierignore",
+)
+# Written by the first run of setup.py from its own definitions.
+GENERATED = ("package.json", "eslint.config.mjs", "tsconfig.base.json", "tsconfig.json", "tsconfig.e2e.json", "vite.config.ts", "vitest.config.ts")
+
+
+def generated_setup(target: Path) -> set[str]:
+    """The generated names, read from the template-only setup script."""
+    source = (ROOT / "template/src/frontend/setup.py").read_text(encoding="utf-8")
+    names = re.findall(r'^    "([\w.]+)": "', source.split("CONFIGS = {", 1)[1], re.MULTILINE)
+    return {*names, "package.json", "eslint.config.mjs"}
+
+
 def answer_blanks(answers: dict[str, str]) -> dict[str, str]:
-    """`{% if backend %}` in a path copies a literal `{% if backend %}` into the
-    path, which always renders truthy — the opposite of what the filename says."""
+    """Reject answer strings that would be interpreted as template syntax."""
     out = {}
     for key, value in answers.items():
         if any(mark in value for mark in ("{%", "%}")):
@@ -115,6 +139,23 @@ def copier_python() -> str:
 def render(name: str, answers: dict[str, str]) -> Path | None:
     target = OUT / name
     shutil.rmtree(target, ignore_errors=True)
+    source = Path(tempfile.mkdtemp(prefix="bbp-template-"))
+    try:
+        shutil.copy2(ROOT / "copier.yml", source / "copier.yml")
+        shutil.copytree(
+            ROOT / "template",
+            source / "template",
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+        subprocess.run(["git", "init", "-q"], cwd=source, check=True)
+        subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=source, check=True)
+        subprocess.run(["git", "config", "user.name", "Template check"], cwd=source, check=True)
+        subprocess.run(["git", "config", "user.email", "template-check@example.invalid"], cwd=source, check=True)
+        subprocess.run(["git", "add", "copier.yml", "template"], cwd=source, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "template snapshot"], cwd=source, check=True)
+    except Exception:
+        shutil.rmtree(source)
+        raise
     args = dict(COMMON)
     args.update(answers)
     cmd = [copier_python()]
@@ -125,16 +166,33 @@ def render(name: str, answers: dict[str, str]) -> Path | None:
     cmd += ["--overwrite", "--defaults", "--trust", "--quiet"]
     for key, value in args.items():
         cmd += ["-d", f"{key}={value}"]
-    result = subprocess.run([*cmd, str(ROOT), str(target)], stdin=subprocess.DEVNULL, capture_output=True, text=True)
-    if result.returncode != 0:
-        fail(name, "copier exited non-zero")
-        print("\n".join(result.stderr.strip().splitlines()[-5:]))
-        return None
-    return target
+    # Offline: the setup task writes the files and skips create-vite and the
+    # package manager. The generated CI job renders with both.
+    env = {
+        **os.environ,
+        "STEERABLE_NO_INSTALL": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    try:
+        result = subprocess.run(
+            [*cmd, str(source), str(target)],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        if result.returncode != 0:
+            fail(name, "copier exited non-zero")
+            print("\n".join(result.stderr.strip().splitlines()[-5:]))
+            return None
+        return target
+    finally:
+        shutil.rmtree(source)
 
 
 def check(target: Path, name: str, answers: dict[str, str]) -> None:
     problems = 0
+
     ignored = {".venv", ".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "node_modules"}
     files = [p for p in target.rglob("*") if p.is_file() and not ignored & set(p.relative_to(target).parts)]
 
@@ -161,61 +219,94 @@ def check(target: Path, name: str, answers: dict[str, str]) -> None:
         fail(name, f"CI gate list rendered {gates} indented lines; expected one gate per line")
         problems += 1
 
-    if (target / "pyproject.toml").exists():
-        pyproject = (target / "pyproject.toml").read_text(encoding="utf-8")
-        for expected in ("[tool.ruff]", "[tool.mypy]", "[tool.pytest.ini_options]"):
-            if expected not in pyproject:
-                fail(name, f"{expected} missing from pyproject.toml")
+    has_frontend = frontend(answers)
+    frontend_root = answers.get("frontend_root", "src/frontend")
+    frontend_source_root = answers.get("frontend_source_root", frontend_root)
+    frontend_files = (*TOOLCHAIN, "docs/architecture/frontend.verify.mjs")
+    if has_frontend:
+        written = generated_setup(target)
+        for generated in GENERATED:
+            if generated not in written:
+                fail(name, f"setup.py writes no {generated}")
                 problems += 1
-        for required in ("Makefile", ".pre-commit-config.yaml", ".python-version", ".github/workflows/verify.yml", "tools/check.py"):
-            if not (target / required).exists():
-                fail(name, f"{required} missing for a Python backend")
+            generated_path = target / generated if generated == "tsconfig.e2e.json" else target / frontend_root / generated
+            if not generated_path.exists():
+                fail(name, f"frontend setup did not generate {generated_path.relative_to(target)}")
                 problems += 1
-
-    frontend_files = (
-        "package.json",
-        "eslint.config.mjs",
-        "prettier.config.mjs",
-        "tsconfig.json",
-        "vitest.config.ts",
-        "vite.config.ts",
-        ".husky/pre-commit",
-        "docs/architecture/frontend.verify.mjs",
-        "src/frontend/src/pages/home/ui/HomePage.test.tsx",
-    )
-    frontend = answers.get("frontend") == "true"
-    for required in frontend_files:
-        if frontend != (target / required).exists():
-            fail(name, f"{required} {'missing' if frontend else 'present'} for a {'frontend' if frontend else 'backend-only'} repo")
+        if not (target / frontend_source_root / "app/index.tsx").exists():
+            fail(name, f"frontend setup did not write the FSD app entry under {frontend_source_root}/app/index.tsx")
             problems += 1
-    # A directory that only one stack owns must not appear in the other scope:
-    # copier keeps an emptied directory, so a stray `src/backend/` looks like a
-    # full-stack layout and sends agents to code that is not there.
-    for owned, wanted in (("src/backend", answers.get("backend") == "true"), ("src/frontend", frontend)):
-        if not wanted and (target / owned).exists():
-            fail(name, f"{owned}/ exists in a scope that does not own it")
+        if (target / "src/frontend/setup.py").exists():
+            fail(name, "frontend setup script leaked into the generated repository")
+            problems += 1
+        if (target / "src/frontend").exists():
+            fail(name, "frontend-only output retained the src/frontend staging directory")
+            problems += 1
+        backend_artifacts = (
+            "src/backend",
+            "tools",
+            "pyproject.toml",
+            "Makefile",
+            ".python-version",
+            "docs/architecture/backend.md",
+            "docs/architecture/database.md",
+            "docs/architecture/backend.verify.mjs",
+        )
+        for artifact in backend_artifacts:
+            if (target / artifact).exists():
+                fail(name, f"frontend-only output contains backend artifact {artifact}")
+                problems += 1
+        for misplaced in ("app", "pages", "widgets", "features", "entities", "shared", "test-setup.ts"):
+            if (target / misplaced).exists():
+                fail(name, f"FSD source must live under src/, not repository-root/{misplaced}")
+                problems += 1
+        python_files = [p for p in files if p.suffix == ".py"]
+        if python_files:
+            fail(name, "frontend-only output contains Python files:\n" + "\n".join(f"  {p.relative_to(target)}" for p in python_files))
+            problems += 1
+        ignores = [p for p in files if p.name == ".gitignore"]
+        if len(ignores) != 1 or ignores[0].relative_to(target).as_posix() != ".gitignore":
+            fail(name, "frontend-only output should have one root .gitignore")
+            problems += 1
+        setup = ROOT / "template/src/frontend/setup.py"
+        index = (target / "index.html").read_text(encoding="utf-8")
+        if 'src="/src/app/index.tsx"' not in index:
+            fail(name, "root index.html does not load /src/app/index.tsx")
+            problems += 1
+        rerun = subprocess.run(
+            [sys.executable, str(setup), "--no-install"],
+            cwd=target,
+            capture_output=True,
+            text=True,
+        )
+        if rerun.returncode != 0 or not (target / "src/app/index.tsx").exists():
+            fail(name, "rerunning frontend setup did not preserve the root src/ app")
+            if rerun.returncode != 0:
+                print("\n".join(rerun.stderr.strip().splitlines()[-5:]))
+            problems += 1
+    for required in frontend_files:
+        if has_frontend != (target / required).exists():
+            fail(name, f"{required} {'missing' if has_frontend else 'present'} for a frontend repo")
             problems += 1
     header = (target / ".header.json").read_text(encoding="utf-8")
+    if '"scope": "frontend-only"' not in header:
+        fail(name, ".header.json does not declare a frontend-only project")
+        problems += 1
+    for path in ("src/backend", "src/frontend", "tools"):
+        if (target / path).exists():
+            fail(name, f"frontend-only output retained staging path {path}/")
+            problems += 1
+    generated = GENERATED if has_frontend else ()
     for declared in re.findall(r'"frontend_toolchain": \[([^\]]*)\]', header):
         for path in re.findall(r'"([^"]+)"', declared):
-            if not (target / path).exists():
+            if not (target / path).exists() and Path(path).name not in generated:
                 fail(name, f".header.json frontend_toolchain names {path}, which is not in the repo")
                 problems += 1
-    for declared in re.findall(r'"backend_toolchain": \[([^\]]*)\]', header):
-        for path in re.findall(r'"([^"]+)"', declared):
-            if not (target / path).exists():
-                fail(name, f".header.json backend_toolchain names {path}, which is not in the repo")
-                problems += 1
-    testing = (target / "docs/engineering/testing.md").read_text(encoding="utf-8")
-    if "tests/backend/" in testing:
-        fail(name, "testing.md still points at a top-level tests/backend/ directory")
-        problems += 1
-
-    if frontend:
-        package = (target / "package.json").read_text(encoding="utf-8")
-        for script in ('"check"', '"lint:fsd"', '"typecheck"', '"test":', '"format:check"'):
-            if script not in package:
-                fail(name, f"package.json has no {script} script")
+    if has_frontend:
+        # The app comes from create-vite; the generator is template-only.
+        for script in ("create_vite", "move_entry", "patch_index_html", "merge_package_json"):
+            if f"def {script}(" not in (ROOT / "template/src/frontend/setup.py").read_text(encoding="utf-8"):
+                fail(name, f"template/src/frontend/setup.py has no {script} step")
                 problems += 1
 
     if not problems:
@@ -224,10 +315,7 @@ def check(target: Path, name: str, answers: dict[str, str]) -> None:
 
 
 PROVEN = {
-    "docs/architecture/{% if backend %}backend.md{% endif %}.jinja",
-    "docs/architecture/{% if backend %}database.md{% endif %}.jinja",
     "docs/architecture/{% if frontend %}frontend.md{% endif %}.jinja",
-    "docs/architecture/{% if backend %}backend.verify.mjs{% endif %}.jinja",
     "docs/architecture/{% if frontend %}frontend.verify.mjs{% endif %}.jinja",
 }
 
@@ -236,7 +324,7 @@ def check_layout() -> list[str]:
     """`{% if %}` in a file name is a feature. `{% if %}` in a directory name is
     not: it was proven word-for-word to make the file vanish, and the render
     reported success. Files stay in normal directories, or in a directory that
-    only ever exists for one stack (`tools/`, `migrations/`)."""
+    only ever exists for one stack."""
     problems = []
     for path in copier_files():
         for part in path.split("/")[:-1]:
@@ -256,8 +344,8 @@ def main() -> int:
         for line in layout:
             print(f"  {line}")
         return 1
-    for name, answers, owner in SCOPES:
-        rendered = answer_blanks({**answers, "api_types_owner": owner})
+    for name, answers in SCOPES:
+        rendered = answer_blanks(answers)
         target = render(name, rendered)
         if target is not None:
             check(target, name, rendered)

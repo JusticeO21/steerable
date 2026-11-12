@@ -42,7 +42,7 @@ new user type, a new class of data.
 
 ## Authentication
 
-Owned by the API repository{% if backend %}{% else %} this client calls{% endif %}.
+Owned by the external API service.
 Record the choice in an ADR before implementing it; the requirements it must
 meet:
 
@@ -109,7 +109,7 @@ meet:
 - Secret scanning runs pre-commit and in CI. A leaked secret is rotated
   immediately; deleting the commit is not containment.
 - Each environment and each service has its own credentials. The application
-  role cannot alter schema; migrations use a separate role.
+  role cannot alter schema; schema changes use dedicated deployment credentials.
 
 ## Data protection
 
@@ -158,10 +158,6 @@ meet:
 3. **Eradicate and recover.**
 4. **Notify** affected parties and regulators within legal deadlines.
 5. **Blameless postmortem** with tracked action items.
-
-{%- if backend %}
-Maintain a runbook per critical alert.
-{%- endif %}
 
 ## Secure development lifecycle
 

@@ -1,4 +1,7 @@
-// Rules from docs/architecture/frontend.md, enforced here.
+// Rules from docs/architecture/frontend.md, enforced here. Started from the
+// create-vite starter (js.configs.recommended, typescript-eslint recommended,
+// react-hooks, react-refresh) and given the type-aware rules, a11y, and the
+// FSD boundaries this template holds every frontend to.
 //
 //   pnpm lint          this file alone
 //   pnpm lint:fsd      the FSD layer patterns in frontend.md and this file must
@@ -8,13 +11,21 @@
 // threshold or disable a rule to make the build pass.
 import js from '@eslint/js'
 import boundaries from 'eslint-plugin-boundaries'
+import { defineConfig, globalIgnores } from 'eslint/config'
 import { createTypeScriptImportResolver } from 'eslint-import-resolver-typescript'
 import importPlugin from 'eslint-plugin-import'
 import jsxA11y from 'eslint-plugin-jsx-a11y'
 import react from 'eslint-plugin-react'
 import reactHooks from 'eslint-plugin-react-hooks'
+import reactRefresh from 'eslint-plugin-react-refresh'
 import globals from 'globals'
 import tseslint from 'typescript-eslint'
+
+import packageJson from './package.json' with { type: 'json' }
+
+// The version in dependencies is what the app runs on: tooling packages
+// declare a wide range, so 'detect' would guess from the sorted list.
+const REACT_VERSION = packageJson.dependencies.react
 
 const MAX_LINES_WARN = 400
 const MAX_LINES_ERROR = 600
@@ -23,20 +34,18 @@ const MAX_LINES_ERROR = 600
 // in docs/architecture/frontend.md; lint:fsd fails when they disagree.
 const FSD_LAYERS = ['app', 'pages', 'widgets', 'features', 'entities', 'shared']
 
-const tsResolver = { typescript: createTypeScriptImportResolver() }
-
-// Each type names its src/ directory files before (and above) the slice
+// Each type names its layer directory files before (and above) the slice
 // pattern. boundaries matches top-down and a file's first match wins, so
-// src/features/cancel-order/index.ts must fall under "features" rather than
+// features/cancel-order/index.ts must fall under "features" rather than
 // being taken for a slice named "index.ts".
 const layerElements = FSD_LAYERS.flatMap((layer) => {
-  const dir = { type: `${layer}-dir`, pattern: `{{ frontend_root }}/src/${layer}/*.*` }
+  const dir = { type: `${layer}-dir`, pattern: `{SOURCE_PREFIX}${layer}/*.*` }
   if (layer === 'app' || layer === 'shared') {
-    return [dir, { type: layer, pattern: `{{ frontend_root }}/src/${layer}/**` }]
+    return [dir, { type: layer, pattern: `{SOURCE_PREFIX}${layer}/**` }]
   }
   // No trailing /** on slices: a slice's own index.ts is its public API and
   // must be governed by the same policies as its internals.
-  return [dir, { type: layer, pattern: `{{ frontend_root }}/src/${layer}/*`, capture: ['slice'] }]
+  return [dir, { type: layer, pattern: `{SOURCE_PREFIX}${layer}/*`, capture: ['slice'] }]
 })
 
 const allowedBelow = (index) =>
@@ -61,44 +70,43 @@ policies.push({
   ],
 })
 
-export default tseslint.config(
+const tsResolver = { typescript: createTypeScriptImportResolver() }
+
+// The boundary rules resolve each import to a file through TypeScript, so the
+// parser needs type information for the files they judge. Type-aware rules
+// stay off for the script files in no tsconfig include (e.g. this one).
+const configFiles = ['**/*.config.{js,mjs,ts}', 'eslint.config.mjs']
+
+// The app and its node_modules sit together: ESLint resolves plugins and
+// settings from where this file loads, so it lives there, and every path below
+// is relative to it.
+export default defineConfig([
+  globalIgnores([
+    'dist',
+    'coverage',
+    'playwright-report',
+    'test-results',
+    '**/*.d.ts',
+  ]),
   {
-    ignores: [
-      'node_modules/**',
-      'dist/**',
-      'coverage/**',
-      'playwright-report/**',
-      'test-results/**',
-      '**/*.d.ts',
+    files: ['**/*.{ts,tsx}'],
+    extends: [
+      js.configs.recommended,
+      tseslint.configs.recommended,
+      tseslint.configs.strictTypeChecked,
+      tseslint.configs.stylisticTypeChecked,
+      reactHooks.configs.flat.recommended,
+      reactRefresh.configs.vite,
     ],
-  },
-
-  js.configs.recommended,
-  ...tseslint.configs.strictTypeChecked,
-  ...tseslint.configs.stylisticTypeChecked,
-
-  {
     languageOptions: {
       parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
       globals: { ...globals.browser, ...globals.node },
     },
-  },
-
-  // Config and script files are JS: no type information to check against.
-  {
-    files: ['**/*.{js,mjs,cjs}'],
-    ...tseslint.configs.disableTypeChecked,
-  },
-
-  {
-    files: ['**/*.{ts,tsx}'],
-    plugins: { react, 'react-hooks': reactHooks, 'jsx-a11y': jsxA11y },
-    settings: { react: { version: 'detect' } },
+    plugins: { react, 'jsx-a11y': jsxA11y, import: importPlugin },
+    settings: { react: { version: REACT_VERSION }, 'import/resolver': tsResolver },
     rules: {
       ...react.configs.flat.recommended.rules,
       ...react.configs.flat['jsx-runtime'].rules,
-      'react-hooks/rules-of-hooks': 'error',
-      'react-hooks/exhaustive-deps': 'error',
       'react/prop-types': 'off',
       ...jsxA11y.flatConfigs.recommended.rules,
 
@@ -141,11 +149,17 @@ export default tseslint.config(
       '@typescript-eslint/switch-exhaustiveness-check': 'error',
 
       'no-console': ['error', { allow: ['warn', 'error'] }],
+      'import/no-cycle': ['error', { maxDepth: 5 }],
 
       // Warn tier first, error tier last: ESLint applies the last matching
       // config, so the stronger limit must come second.
       'max-lines': ['warn', { max: MAX_LINES_WARN, skipBlankLines: true, skipComments: true }],
     },
+  },
+
+  {
+    files: configFiles,
+    extends: [tseslint.configs.disableTypeChecked],
   },
 
   // Error tier overrides the warn tier.
@@ -158,33 +172,25 @@ export default tseslint.config(
 
   // Framework route files: a default export is mandatory there.
   {
-    files: ['{{ frontend_root }}/src/pages/*/ui/*Page.tsx', '{{ frontend_root }}/src/app/**/*.{ts,tsx}'],
+    files: ['{SOURCE_PREFIX}pages/*/ui/*Page.tsx', '{SOURCE_PREFIX}app/**/*.{ts,tsx}'],
     rules: { 'no-restricted-syntax': 'off' },
   },
 
   {
-    files: ['**/*.config.{js,mjs,ts}', 'eslint.config.mjs'],
+    files: configFiles,
     rules: { 'max-lines': 'off', 'no-restricted-syntax': 'off' },
   },
 
   {
-    files: ['**/*.{test,spec}.{ts,tsx}', 'e2e/**/*.ts', '**/*.setup.ts'],
+    files: ['{SOURCE_PREFIX}**/*.{test,spec}.{ts,tsx}', '**/*.setup.ts'],
     rules: { '@typescript-eslint/no-non-null-assertion': 'off' },
-  },
-
-  // Import hygiene: no cycles.
-  {
-    files: ['**/*.{ts,tsx}'],
-    plugins: { import: importPlugin },
-    settings: { 'import/resolver': tsResolver },
-    rules: { 'import/no-cycle': ['error', { maxDepth: 5 }] },
   },
 
   // FSD layer direction. The plugin resolves each import to a file before it
   // can know which layer it targets, so the TS-aware resolver is required;
   // without it the rule silently passes.
   {
-    files: ['{{ frontend_root }}/src/**/*.{ts,tsx}'],
+    files: ['{SOURCE_PREFIX}**/*.{ts,tsx}'],
     plugins: { boundaries },
     settings: {
       'boundaries/elements': layerElements,
@@ -195,4 +201,4 @@ export default tseslint.config(
       'boundaries/dependencies': ['error', { default: 'disallow', policies }],
     },
   },
-)
+])

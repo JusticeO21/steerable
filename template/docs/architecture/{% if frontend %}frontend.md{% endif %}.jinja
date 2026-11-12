@@ -4,12 +4,12 @@ The frontend follows **[Feature-Sliced Design (FSD)](https://feature-sliced.desi
 
 ## Stack
 
-{{ frontend_language }} strict, {{ ui_stack }}, TanStack Query (server state), React Hook Form + Zod (forms), {{ design_system }}, `openapi-typescript` + `openapi-fetch` (generated API types and client), Vitest + Testing Library, {% if project_type == 'full-stack' %}Playwright (e2e), {% endif %}ESLint (with FSD boundary rules) + a `frontend.verify.mjs` check.
+{{ frontend_language }} strict, {{ ui_stack }}, TanStack Query (server state), React Hook Form + Zod (forms), {{ design_system }}, `openapi-typescript` + `openapi-fetch` (generated API types and client), Vitest + Testing Library, Playwright (e2e), ESLint (with FSD boundary rules) + a `frontend.verify.mjs` check.
 
 ## The three levels of FSD
 
 ```
-src/
+{{ frontend_source_root }}/
   app/        ─┐
   pages/       │  LAYERS    (fixed, ordered by responsibility, top = most dependent)
   widgets/     │
@@ -24,58 +24,68 @@ Inside a slice (and in `app`/`shared`): **segments**, grouped by technical purpo
 ## Target layout
 
 ```
-src/frontend/
-  src/
-    app/                          # initialization: wires everything together
-      providers/                  #   QueryClientProvider, Router, i18n, theme, error boundary
-      router/                     #   route table -> pages
-      styles/                     #   global CSS, design tokens
-      index.tsx
-    pages/                        # route-level screens (one slice per route)
-      orders-list/
-        ui/OrdersListPage.tsx
-        index.ts
-      order-details/
-      sign-in/
-    widgets/                      # large self-sufficient UI blocks composed of features + entities
-      app-header/
-      orders-table/
-        ui/OrdersTable.tsx
-        model/useOrdersTableState.ts
-        index.ts
-    features/                     # reusable user actions that deliver business value
-      create-order/
-        ui/CreateOrderForm.tsx
-        model/schema.ts           #   form Zod schema
-        api/create-order.ts       #   mutation
-        index.ts
-      cancel-order/
-      issue-refund/
-      invite-user/
-    entities/                     # business entities: what the product is "about"
-      order/
-        ui/OrderStatusBadge.tsx  OrderCard.tsx
-        model/types.ts  order-status.ts   #   domain types + pure helpers
-        api/order-queries.ts              #   query keys + fetchers
-        index.ts
-      user/
-      tenant/
-      plan/
-    shared/                       # reusable, business-agnostic foundation
-      api/                        #   http client, generated OpenAPI types, error mapping
-      ui/                         #   design-system components (Button, Modal, Input...)
-      lib/                        #   pure helpers (formatters, dates, hooks)
-      config/                     #   env, constants
-      i18n/                       #   translation setup
-      routes/                     #   route path constants
-  index.html
+{{ frontend_source_root }}/
+  app/                            # initialization: wires everything together
+    providers/                    #   QueryClientProvider, Router, i18n, theme, error boundary
+    router/                       #   route table -> pages
+    styles/                       #   global CSS, design tokens
+    index.tsx
+  pages/                          # route-level screens (one slice per route)
+    orders-list/
+      ui/OrdersListPage.tsx
+      index.ts
+    order-details/
+    sign-in/
+  widgets/                        # large self-sufficient UI blocks composed of features + entities
+    app-header/
+    orders-table/
+      ui/OrdersTable.tsx
+      model/useOrdersTableState.ts
+      index.ts
+  features/                       # reusable user actions that deliver business value
+    create-order/
+      ui/CreateOrderForm.tsx
+      model/schema.ts             #   form Zod schema
+      api/create-order.ts         #   mutation
+      index.ts
+    cancel-order/
+    issue-refund/
+    invite-user/
+  entities/                       # business entities: what the product is "about"
+    order/
+      ui/OrderStatusBadge.tsx  OrderCard.tsx
+      model/types.ts  order-status.ts   #   domain types + pure helpers
+      api/order-queries.ts              #   query keys + fetchers
+      index.ts
+    user/
+    tenant/
+    plan/
+  shared/                         # reusable, business-agnostic foundation
+    api/                          #   http client, generated OpenAPI types, error mapping
+    ui/                           #   design-system components (Button, Modal, Input...)
+    lib/                          #   pure helpers (formatters, dates, hooks)
+    config/                       #   env, constants
+    i18n/                         #   translation setup
+    routes/                       #   route path constants
+{{ frontend_root }}/
+  package.json, index.html, vite.config.ts, vitest.config.ts
 ```
 
-The toolchain lives at the repository root: `package.json`, `eslint.config.mjs`
-(ESLint flat config: types-aware rules, React, a11y, FSD layer imports),
-`prettier.config.mjs`, `tsconfig.base.json` + `tsconfig.json` (strict),
-`vite.config.ts`, `vitest.config.ts`, `playwright.config.ts`, and
-`.husky/pre-commit` (lint-staged).
+The app was scaffolded by `create-vite` (`react-ts`, ESLint) and adapted by
+The template runs Vite during generation, moves the entry point into `app/`,
+and writes the FSD slices above. Package scripts run from
+`{{ frontend_root }}/`, where `node_modules` and the lint config live:
+
+| Location | Files |
+|---|---|
+| `{{ frontend_root }}/` | `package.json`, `eslint.config.mjs` (ESLint flat config: types-aware rules, React, a11y, FSD layer imports), `tsconfig.base.json` + `tsconfig.json` (strict), `vite.config.ts`, `vitest.config.ts`, `index.html` |
+| `{{ frontend_source_root }}/` | FSD layers: `app/`, `pages/`, `widgets/`, `features/`, `entities/`, `shared/` |
+| repository root | `playwright.config.ts` + `e2e/` (type-checked by `tsconfig.e2e.json`), `prettier.config.mjs`, `.husky/pre-commit` (lint-staged) |
+
+The generation script lives in the template and runs on `copier copy` and
+`copier update`; it is not copied into the generated project. A fresh project
+gets a current Vite starter, while an existing app is kept and template-owned
+configuration is refreshed during update.
 
 ## The Import Rule (the core of FSD)
 
@@ -155,11 +165,11 @@ Do not copy server data into a global store. Compose with props and slots first,
 
 ## API client and types (contract-first)
 
-- The backend publishes an OpenAPI schema (FastAPI). `{{ api_client_command }}` runs
+- The API publishes an OpenAPI schema. `{{ api_client_command }}` runs
   `openapi-typescript` against `{{ openapi_schema }}` and writes types to
   `shared/api/schema.d.ts` (committed, regenerated in CI; drift fails the build).
   The source is the file or URL in the `gen:api` script in `package.json`.
-- `shared/api` also contains the typed fetch client (`openapi-fetch`), auth/CSRF header injection, and mapping of the backend error envelope (`error.code`) to a typed `ApiError`.
+- `shared/api` also contains the typed fetch client (`openapi-fetch`), auth/CSRF header injection, and mapping of the API error envelope (`error.code`) to a typed `ApiError`.
 - **Never hand-write types for API payloads.** Entities may define *domain* types derived from the generated ones.
 - Entities wrap raw calls into domain-friendly functions in their `api` segment; pages/features never call the http client directly.
 
@@ -167,7 +177,7 @@ Do not copy server data into a global store. Compose with props and slots first,
 
 - Small, single-purpose components; composition over configuration props.
 - Presentational components in `ui`; logic and data access in `model`/`api` hooks.
-- **No business rules in components.** The backend is authoritative; the UI may mirror rules for UX (e.g. disable a button) but never as the only enforcement. Mirrored rules live in `entities/*/model` with a comment referencing the rule ID (e.g. `BR-ORD-04`).
+- **No business rules in components.** The API is authoritative; the UI may mirror rules for UX (e.g. disable a button) but never as the only enforcement. Mirrored rules live in `entities/*/model` with a comment referencing the rule ID (e.g. `BR-ORD-04`).
 - Memoize only after measuring.
 - Avoid `dangerouslySetInnerHTML`; if unavoidable, sanitize with DOMPurify and document why.
 - Handle **loading, empty, error, and success** states for every data view. No blank screens.
@@ -181,7 +191,7 @@ Every rule below is a gate that ships with the repository and runs in CI.
 | Format | `pnpm format:check` | Prettier; the pre-commit hook rewrites staged files |
 | Lint | `pnpm lint` | `eslint . --max-warnings=0`: `strictTypeChecked`, React hooks, jsx-a11y, no `any`, no default exports, `max-lines` 600 (error) / 400 (warn), the content-literal rule, `import/no-cycle`, and `boundaries/dependencies` for the layer rule |
 | FSD | `pnpm lint:fsd` | `node docs/architecture/frontend.verify.mjs` (no same-layer imports, no deep imports, no catch-all segment folders, one `index.ts` per slice, `frontend.md` names the same layer order) then ESLint |
-| Types | `pnpm typecheck` | `tsc --noEmit` with `strict` and `noUncheckedIndexedAccess` |
+| Types | `pnpm typecheck` | `tsc --noEmit` for the app and `e2e/`, with `strict` and `noUncheckedIndexedAccess` |
 | Tests | `pnpm test` | Vitest + Testing Library |
 | E2E | `pnpm test:e2e` | Playwright; runs in CI once `e2e_gate` is on |
 | Everything | `pnpm check` | the five gates above, in CI order |
@@ -192,7 +202,7 @@ Every rule below is a gate that ships with the repository and runs in CI.
   when nothing imports it. Neither subsumes the other. The boundaries rule
   passes silently when an import cannot be resolved — run it against a real
   violation after changing `boundaries/elements`.
-- Path alias `@/*` -> `{{ frontend_root }}/src/*`, declared in `tsconfig.base.json`, `vite.config.ts`, and `vitest.config.ts`.
+- Path alias `@/*` points to the FSD source root, declared in `tsconfig.base.json`, `vite.config.ts`, and `vitest.config.ts`. Scripts run from `{{ frontend_root }}/`: `pnpm dev` serves it on port 5173.
 - No deep imports: `import { X } from '@/features/cancel-order'`, never `@/features/cancel-order/ui/X`.
 - Each slice ships colocated `*.test.tsx`/`*.test.ts`; a new slice without a test is a review defect.
 - Formatting is not reviewed. A `max-lines` warning is not a pass: split the file.
@@ -225,7 +235,7 @@ Every rule below is a gate that ships with the repository and runs in CI.
 
 ## Content and internationalization
 
-All user-facing text is **data**, never a literal in JSX (`src/**/*.tsx`) or in `alt`, `title`, `placeholder`, or `aria-*`. Where that data lives depends on how many places own it:
+All user-facing text is **data**, never a literal in JSX (`{{ frontend_source_root }}/**/*.tsx`) or in `alt`, `title`, `placeholder`, or `aria-*`. Where that data lives depends on how many places own it:
 
 | Text is... | Lives in |
 |---|---|
@@ -235,7 +245,7 @@ All user-facing text is **data**, never a literal in JSX (`src/**/*.tsx`) or in 
 
 - **Start without an i18n library.** A `content.ts` is a typed `as const` object; dynamic text is a function (`openLabel: (n: string) => \`Open invoice ${n}\``), so it is testable and greppable.
 - **Adopt `shared/i18n` when a second locale ships**, and move only the strings that locale needs. `content.ts` files become the default-locale message source. Do not introduce an i18n library "for later"; an unused key catalog rots faster than inline copy.
-- **Never create a root-level `src/content/` folder.** It is a second, unowned dumping ground that breaks the slice public-API rule.
+- **Never create a root-level `content/` folder.** It is a second, unowned dumping ground that breaks the slice public-API rule.
 - Interface rules that apply to every string, whichever home it has:
   - Keys are semantic (`invoices.empty.action`), not the English text.
   - Interpolation is a function parameter, never string concatenation at the call site.
@@ -250,7 +260,7 @@ All user-facing text is **data**, never a literal in JSX (`src/**/*.tsx`) or in 
 
 **New business concept:** create `entities/<noun>` with `model` (types, pure helpers), `api` (keys + fetchers), `ui` (display-only components), `index.ts`.
 
-**API changed in backend:** run `{{ api_client_command }}`, fix compile errors, commit the regenerated schema.
+**API contract changed:** run `{{ api_client_command }}`, fix compile errors, commit the regenerated schema.
 
 ## Anti-patterns (reject in review)
 

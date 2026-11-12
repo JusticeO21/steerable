@@ -28,7 +28,7 @@ PR description template:
 ```md
 ## What / Why
 ## How to test
-## Risks & rollout (migrations, flags, perf, security)
+## Risks & rollout (API contracts, flags, performance, security)
 ## Checklist
 - [ ] Tests  - [ ] Docs  - [ ] Business rules referenced (BR-...)  - [ ] Security checklist
 ```
@@ -39,37 +39,24 @@ Responding to feedback: reply to every comment, resolve when addressed, and push
 
 Review in this order, spending the most attention at the top.
 
-0. **No code smells survived the linter.** CI already rejects what a tool can
-   prove: complexity and nesting limits, unused arguments and variables,
-   mutable default arguments, shadowed builtins, blocking calls in `async def`,
-   bare `except`, `eval`/`exec`, printing instead of logging, string-built SQL.
-   A reviewer does not repeat those checks; a reviewer asks for the ones a tool
-   cannot see (the table at the end of this document).
-1. **Correctness and requirements**: does it do what was asked and match `business-rules.md`? Edge cases, error paths, off-by-one, null handling, time zones, concurrency, idempotency.
-2. **Design**: right layer (route -> service -> repository)? Fits architecture and ADRs? Appropriate abstraction, not over-engineered or duplicated? Public contracts stable?
+0. **No code smells survived the linter.** CI already rejects what configured
+   tools can prove. Reviewers focus on behavior and risks those tools cannot
+   detect.
+1. **Correctness and requirements**: does it match `business-rules.md`? Check
+   edge cases, error paths, boundary values, null handling, and state changes.
+2. **Design**: right FSD layer? Fits architecture and ADRs? Appropriate
+   abstraction, not over-engineered or duplicated? Public contracts stable?
 3. **Security**: see checklist below.
-4. **Data and migrations**: reversible/backward compatible, indexed, locks considered, tenant column and constraints present, no N+1.
+4. **API contract and client state**: generated types current, errors mapped,
+   cache invalidation correct, no stale or cross-session data.
 5. **Tests**: meaningful, cover failure paths and the business rule, not brittle, not testing implementation details.
 6. **Performance and reliability**: unbounded loops/queries, missing pagination, timeouts, retries, resource leaks, hot paths.
 7. **Readability and maintainability**: clear naming, small functions, comments explain *why* not *what*, consistent with conventions.
 8. **Observability**: useful logs without PII, metrics/traces on new critical paths.
 9. **Dependencies and docs**: new dependency justified? Docs/ADR updated?
 
-### Stack-specific checks
+### Frontend (Feature-Sliced Design)
 
-{% if backend %}
-**Backend**
-- [ ] Layering respected (router -> service -> repository); no data-store call outside repositories
-- [ ] No blocking calls inside `async def`; outbound calls have timeouts
-- [ ] Routes declare their response type, status code, and permission; unknown input fields are rejected
-- [ ] No N+1 access; transaction owned by the service and kept short
-- [ ] Type hints complete; no bare `except`; errors raised as typed `AppError`s
-- [ ] Job handlers are idempotent, have timeouts and bounded retries
-- [ ] Migration is backward compatible and hand-reviewed
-{% endif %}
-{% if frontend %}
-
-**Frontend (Feature-Sliced Design)**
 - [ ] Imports follow the layer rule (only downward); no cross-imports between slices of one layer
 - [ ] Slices consumed only through their `index.ts`; no deep imports
 - [ ] Code is on the right layer (see decision table in `frontend.md`); no `utils/`/`helpers/`/`types/` dumping folders
@@ -77,16 +64,13 @@ Review in this order, spending the most attention at the top.
 - [ ] API types come from `shared/api` generated schema (run `{{ api_client_command }}` if the contract changed)
 - [ ] Loading, empty, error states handled; accessibility basics met
 - [ ] Slice naming uses domain language; no premature slicing
-{% endif %}
 
 ### Security checklist (mandatory on every PR)
 
-- [ ] Input validated at the edge (Pydantic); unknown fields rejected
-- [ ] AuthN/AuthZ enforced server-side; tenant scoping on every query
+- [ ] Client-side checks are not treated as authorization; no credentials in browser-accessible storage
 - [ ] No secrets, tokens, or PII in code, logs, errors, or responses
-- [ ] Parameterized queries only; output encoded
-- [ ] New endpoints have rate limiting where abusive use is plausible
-- [ ] Error messages don't leak internals or resource existence across tenants
+- [ ] User-controlled content is rendered safely; raw HTML requires justification
+- [ ] Errors do not expose secrets or unnecessary personal data
 
 ## Comment conventions
 
@@ -104,7 +88,7 @@ Write comments that explain the *why* and offer an alternative: "blocking: this 
 
 ## Approval and merge policy
 
-- At least **1 approval** from a code owner; **2** for security-sensitive areas, migrations, or architecture changes (`CODEOWNERS` enforces).
+- At least **1 approval** from a code owner; **2** for security-sensitive areas, API contract changes, or architecture changes (`CODEOWNERS` enforces).
 - Authors cannot approve their own PRs. Approval after new commits to risky areas requires re-review.
 - Merge via **squash** with a Conventional Commit title. Delete the branch after merge.
 - Never merge with failing required checks. No force-push to `main`.
@@ -115,7 +99,7 @@ Write comments that explain the *why* and offer an alternative: "blocking: this 
 - **Large refactors:** split into mechanical (no behavior change) and behavioral PRs.
 - **Architecture changes:** require an ADR approved before or alongside the code.
 - **AI-assisted changes:** authors are fully accountable for generated code. Review it with the same rigor; verify it follows `AGENTS.md`, that referenced APIs actually exist, and that tests aren't tautological.
-- **Dependency bumps:** (`uv`/`pnpm` lockfile updates) read changelogs for breaking changes; major bumps need their own PR.
+- **Dependency bumps:** read changelogs for breaking changes; major bumps need their own PR.
 
 ## Disagreements
 

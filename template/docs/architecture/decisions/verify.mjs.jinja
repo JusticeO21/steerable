@@ -15,13 +15,9 @@ const packageJson = existsSync(join(root, 'package.json'))
   ? JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
   : { scripts: {} }
 const scripts = packageJson.scripts || {}
-const makefile = existsSync(join(root, 'Makefile'))
-  ? readFileSync(join(root, 'Makefile'), 'utf8')
-  : ''
-
 // "Verified by" lists commands, separated by semicolons. A command exists in
-// this repository when one of its first two words is a package.json script or a
-// Makefile target, or when it runs a checked-in script (node path/to/file).
+// this repository when it names a package.json script or runs a checked-in
+// script (node path/to/file).
 function commandExists(command) {
   const words = command.trim().split(/\s+/)
   if (words[0] === 'node' && words[1] && existsSync(join(root, words[1].replace(/^\.\//, '')))) {
@@ -36,8 +32,6 @@ function commandExists(command) {
       return Boolean(scripts[next === 'run' ? head[index + 2] : next])
     }
     if (scripts[word]) return true
-    if (word === 'make' && next)
-      return new RegExp(`^${next.replace('.', '\\.')}:`, 'm').test(makefile)
     return false
   })
 }
@@ -85,7 +79,7 @@ for (const file of files) {
     if (commands.length === 0) fail(file, 'Implemented but "Verified by" is empty')
     for (const command of commands) {
       if (!commandExists(command))
-        fail(file, `Verified by "${command}" matches no script or Makefile target`)
+        fail(file, `Verified by "${command}" matches no package script or checked-in script`)
     }
   } else {
     for (const path of paths) {
